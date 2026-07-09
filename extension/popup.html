@@ -1,0 +1,101 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AccentFlow</title>
+    <link rel="stylesheet" href="popup.css">
+</head>
+<body>
+
+    <!-- Toast Notification -->
+    <div id="toast" class="toast"></div>
+
+    <!-- Header -->
+    <div class="header">
+        <div class="logo">
+            <div class="logo-icon">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                    <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                </svg>
+            </div>
+            <h1>AccentFlow</h1>
+        </div>
+        <span class="badge">Extension</span>
+    </div>
+
+    <!-- Status Bar -->
+    <div class="status-bar">
+        <span class="status-dot" id="statusDot"></span>
+        <span class="status-text" id="statusText">Ready — Click Start to begin</span>
+    </div>
+
+    <!-- Control Section -->
+    <div class="control-section">
+        <button class="main-btn" id="mainBtn" title="Start / Stop">
+            <div class="btn-pulse-ring"></div>
+            <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24" id="btnIcon">
+                <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+            </svg>
+        </button>
+        <span class="control-label" id="controlLabel">Press to Start</span>
+        <span class="control-hint">Activate <strong>before</strong> opening ViciDial</span>
+    </div>
+
+    <!-- Info Banner -->
+    <div class="info-banner success" id="infoBanner">
+        <strong>✅ No VB-Cable needed!</strong> This extension directly replaces your microphone in ViciDial with the American accent voice.
+    </div>
+
+    <!-- Transcript Section -->
+    <div class="transcript-section">
+        <div class="transcript-grid">
+            <div>
+                <div class="transcript-label"><span class="dot blue"></span> Your Speech</div>
+                <div class="transcript-box" id="originalBox">
+                    <div class="transcript-empty">Speak and your words appear here...</div>
+                </div>
+            </div>
+            <div>
+                <div class="transcript-label"><span class="dot cyan"></span> US Output</div>
+                <div class="transcript-box" id="convertedBox">
+                    <div class="transcript-empty">American accent output here...</div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <!-- Settings Section -->
+    <div class="settings-section">
+        <div class="settings-card">
+            <div class="settings-title">⚙ Voice Settings</div>
+
+            <div class="setting-row">
+                <label>Speed</label>
+                <input type="range" id="speedSlider" min="0.5" max="2" step="0.1" value="1">
+                <span class="setting-value" id="speedValue">1.0x</span>
+            </div>
+
+            <div class="setting-row">
+                <label>Volume</label>
+                <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
+                <span class="setting-value" id="volumeValue">100%</span>
+            </div>
+        </div>
+    </div>
+
+    <!-- Important Note -->
+    <div class="info-banner warning" id="instructionBanner">
+        <strong>📌 How to use:</strong> Click Start → then open/refresh ViciDial in this same tab. The extension replaces your mic automatically.
+    </div>
+
+    <!-- Footer -->
+    <div class="footer">
+        AccentFlow v1.0 — Real-Time Accent Converter for Call Centers
+    </div>
+
+    <script src="popup.js"></script>
+</body>
+</html>

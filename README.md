@@ -4,64 +4,81 @@
 
 ---
 
-## 🚀 Quick Start
+## 🎯 Two Ways to Use AccentFlow
 
-1. Open `index.html` in **Google Chrome**
-2. Allow microphone access when prompted
-3. Click the **mic button** (or press `Space`)
-4. Start speaking — your words will be transcribed and re-spoken in an American accent!
+### Option 1: Chrome Extension ⭐ RECOMMENDED
+> **No VB-Cable needed!** Works directly inside ViciDial.
+
+### Option 2: Web App + VB-Cable
+> Standalone web app. Needs VB-Cable for audio routing.
 
 ---
 
-## 🖥️ Windows Setup for ViciDial
+## ⭐ Option 1: Chrome Extension (No VB-Cable!)
 
-To route AccentFlow's American accent output into ViciDial as your "microphone", follow these steps:
+The Chrome Extension intercepts ViciDial's microphone and replaces your voice with an American accent — **no extra software needed**.
+
+### How to Install
+
+1. Open **Google Chrome** on your Windows PC
+2. Go to `chrome://extensions/`
+3. Enable **Developer mode** (toggle in top-right corner)
+4. Click **"Load unpacked"**
+5. Select the `extension` folder from this project
+6. The AccentFlow icon appears in your toolbar! 🎉
+
+### How to Use
+
+1. **Click the AccentFlow icon** in Chrome toolbar
+2. **Click the Start button** in the popup
+3. **Allow microphone access** when prompted
+4. **Now open ViciDial** in the SAME Chrome tab (or refresh the ViciDial page)
+5. When ViciDial asks for mic access → AccentFlow intercepts it
+6. **Start speaking** — your words are:
+   - Transcribed to text (Speech-to-Text)
+   - Converted to American accent audio (via Google TTS)
+   - Fed directly to ViciDial as your "microphone"
+7. **The customer hears American English!** 🇺🇸
+
+### Important Notes
+- Start AccentFlow **before** opening/refreshing ViciDial
+- Use **Google Chrome** (speech recognition requires it)
+- Internet connection required
+- Audio goes directly to ViciDial — no sound plays through your speakers
+
+---
+
+## 📱 Option 2: Web App + VB-Cable
+
+If you prefer the standalone web app with more controls:
 
 ### Step 1: Install VB-Audio Virtual Cable (Free)
 
 1. Go to [https://vb-audio.com/Cable/](https://vb-audio.com/Cable/)
-2. Download **VBCable Driver** (the free version is all you need)
-3. Extract the ZIP file
-4. **Right-click** `VBCABLE_Setup_x64.exe` → **Run as Administrator**
-5. Follow the installer prompts
-6. **Restart your computer**
+2. Download **VBCable Driver**
+3. **Right-click** `VBCABLE_Setup_x64.exe` → **Run as Administrator**
+4. **Restart your computer**
 
-After restart, you'll see two new audio devices in your system:
-- `CABLE Input (VB-Audio Virtual Cable)` — this is the virtual speaker
-- `CABLE Output (VB-Audio Virtual Cable)` — this is the virtual microphone
+### Step 2: Configure Audio Routing
 
-### Step 2: Configure Chrome Audio Output
+1. Open **Windows Settings** → **System** → **Sound** → **Volume Mixer**
+2. Set **Google Chrome** output to: `CABLE Input (VB-Audio Virtual Cable)`
 
-1. Open **Windows Settings** → **System** → **Sound**
-2. Scroll down to **Advanced sound options** → click **App volume and device preferences**
-   - On Windows 11: Settings → System → Sound → Volume Mixer
-3. Find **Google Chrome** in the list
-4. Set its **Output** to: `CABLE Input (VB-Audio Virtual Cable)`
-
-This routes all of Chrome's audio (including AccentFlow's TTS) through the virtual cable.
-
-### Step 3: Open AccentFlow in Chrome
+### Step 3: Open AccentFlow Web App
 
 1. Open `index.html` in **Google Chrome**
-2. When prompted, **allow microphone access**
-3. Your physical microphone will be used for speech recognition
+2. Allow microphone access
 
-### Step 4: Open ViciDial in Edge (or another browser)
+### Step 4: Open ViciDial
 
-1. Open **Microsoft Edge** (or Firefox)
-2. Navigate to your ViciDial login page
-3. In ViciDial's audio/phone settings, set the **microphone** to: `CABLE Output (VB-Audio Virtual Cable)`
-4. Keep the **speaker/output** set to your headphones/speakers
+1. Open ViciDial in **Microsoft Edge** (separate browser!)
+2. Set ViciDial's microphone to: `CABLE Output (VB-Audio Virtual Cable)`
 
-### Step 5: Test the Setup
+### Step 5: Start Converting
 
-1. In Chrome (AccentFlow), click the mic button to start
-2. Speak into your physical microphone
-3. You should see:
-   - Your words appear in the "Your Speech" panel
-   - The American accent version in the "American Output" panel
-4. The TTS audio goes through VB-Cable → ViciDial picks it up as microphone input
-5. The customer hears the American accent voice!
+1. Click the mic button in AccentFlow
+2. Speak naturally — your words are re-spoken in American accent
+3. ViciDial picks up the converted audio through VB-Cable
 
 ---
 
@@ -69,52 +86,47 @@ This routes all of Chrome's audio (including AccentFlow's TTS) through the virtu
 
 | Control | Action |
 |---------|--------|
-| **Mic Button** | Start/Stop the accent converter |
-| **Space** | Toggle start/stop (keyboard shortcut) |
-| **Escape** | Stop the converter |
-| **Voice** | Select from available US English voices |
+| **Mic Button / Start** | Start/Stop the accent converter |
+| **Space** | Toggle start/stop (web app only) |
+| **Escape** | Stop (web app only) |
 | **Speed** | Adjust speech rate (0.5x — 2.0x) |
-| **Pitch** | Adjust voice pitch (0.5 — 2.0) |
+| **Pitch** | Adjust voice pitch (web app only) |
 | **Volume** | Adjust output volume |
-| **Preview** | Test the selected voice |
 
 ---
 
 ## 🔧 Troubleshooting
 
-### "No US English voices available"
-- Make sure you're using **Google Chrome**
-- Try refreshing the page (voices load asynchronously)
-- Check if your system has English (US) language pack installed
+### Extension: "Could not connect to page"
+- Refresh the ViciDial page and try again
+- Make sure you're on a regular webpage (not chrome:// pages)
 
-### Microphone not working
-- Click the lock/microphone icon in Chrome's address bar
-- Set Microphone to **Allow**
-- Make sure your physical mic is connected and set as default in Windows Sound settings
+### Extension: No audio going to ViciDial
+- Make sure you clicked Start **before** ViciDial requested your mic
+- Refresh ViciDial after activating AccentFlow
+- Check Chrome console for errors (F12 → Console)
 
-### ViciDial can't hear the output
-- Verify VB-Cable is installed (check Windows Sound settings for "CABLE" devices)
-- Confirm Chrome's output is set to `CABLE Input` in the Volume Mixer
-- Confirm ViciDial's microphone is set to `CABLE Output`
+### Speech recognition not working
+- Use **Google Chrome** (required)
+- Allow microphone permission
+- Check internet connection (speech recognition uses Google's cloud)
+- Reduce background noise / use a headset
 
-### Too much delay
-- Increase the **Speed** slider to 1.2x or 1.3x
-- Use shorter sentences when speaking
-- Ensure you have a stable internet connection (Chrome's speech recognition uses the cloud)
-
-### Echo or feedback loop
-- Make sure AccentFlow (Chrome) and ViciDial (Edge) are in **separate browsers**
-- Use headphones to prevent speaker output from being picked up by the mic
+### Audio sounds robotic
+- The extension uses Google Translate's TTS engine — it's decent but not human
+- The web app lets you choose from multiple voices
+- For ultra-realistic voice: consider upgrading to ElevenLabs or OpenAI TTS
 
 ---
 
 ## 📋 Requirements
 
-- **Browser**: Google Chrome (latest version recommended)
-- **OS**: Windows 10 or 11
-- **Microphone**: Any USB or built-in microphone
-- **Internet**: Required for Chrome's speech recognition
-- **VB-Cable**: Free virtual audio cable (for ViciDial integration)
+| Requirement | Extension | Web App |
+|------------|-----------|---------|
+| Browser | Chrome | Chrome + Edge |
+| VB-Cable | ❌ Not needed | ✅ Required |
+| Internet | ✅ Required | ✅ Required |
+| Microphone | ✅ Required | ✅ Required |
 
 ---
 
@@ -122,46 +134,51 @@ This routes all of Chrome's audio (including AccentFlow's TTS) through the virtu
 
 ```
 VOICECHANGER/
-├── index.html          ← Open this file in Chrome
+├── extension/              ← Chrome Extension (Option 1)
+│   ├── manifest.json
+│   ├── popup.html
+│   ├── popup.css
+│   ├── popup.js
+│   ├── background.js
+│   ├── content.js
+│   ├── inject.js
+│   └── icons/
+│       ├── icon16.png
+│       ├── icon48.png
+│       └── icon128.png
+│
+├── index.html              ← Web App (Option 2)
 ├── css/
-│   └── styles.css      ← All styling
+│   └── styles.css
 ├── js/
-│   ├── app.js          ← Main application controller
-│   ├── speech.js       ← Speech recognition & synthesis
-│   └── visualizer.js   ← Audio waveform visualizer
-└── README.md           ← This file
+│   ├── app.js
+│   ├── speech.js
+│   └── visualizer.js
+│
+└── README.md               ← This file
 ```
 
 ---
 
 ## 💡 How It Works
 
+### Chrome Extension Flow
 ```
-Your Voice (Microphone)
-    ↓
-Web Speech API (SpeechRecognition)
-    → Converts your speech to text in real-time
-    ↓
-Text Processing
-    → Cleans up, capitalizes, adds punctuation
-    ↓
-Web Speech API (SpeechSynthesis)
-    → Re-speaks the text with a US English voice
-    ↓
-Audio Output → VB-Cable → ViciDial
-    → Customer hears American accent!
+🎤 Your Mic → Extension intercepts getUserMedia
+    → Speech Recognition (STT)
+    → Google TTS API (American accent audio)
+    → Feeds audio directly to ViciDial as "microphone"
+    → 🔊 Customer hears American English!
 ```
 
----
-
-## ⚡ Future Improvements
-
-- [ ] Integration with **OpenAI Whisper** for better speech recognition
-- [ ] Integration with **ElevenLabs** for ultra-realistic AI voices
-- [ ] Lower latency with streaming processing
-- [ ] Voice cloning (sound like a specific person)
-- [ ] Multi-language support
-- [ ] Browser extension for easier ViciDial integration
+### Web App Flow
+```
+🎤 Your Mic → Chrome Speech Recognition
+    → Text-to-Speech (American accent)
+    → Audio output → VB-Cable
+    → ViciDial reads VB-Cable as microphone
+    → 🔊 Customer hears American English!
+```
 
 ---
 
