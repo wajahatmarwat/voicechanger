@@ -1,0 +1,272 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+    <meta charset="UTF-8">
+    <meta name="viewport" content="width=device-width, initial-scale=1.0">
+    <title>AccentFlow — Real-Time Voice Accent Converter</title>
+    <meta name="description" content="Convert your accent to native American English in real-time. Built for call center professionals using ViciDial.">
+    <meta name="theme-color" content="#0a0e27">
+
+    <!-- Favicon (inline SVG) -->
+    <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>🎤</text></svg>">
+
+    <!-- Google Font: Inter -->
+    <link rel="preconnect" href="https://fonts.googleapis.com">
+    <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+    <link href="https://fonts.googleapis.com/css2?family=Inter:wght@300;400;500;600;700;800;900&display=swap" rel="stylesheet">
+
+    <!-- Styles -->
+    <link rel="stylesheet" href="css/styles.css">
+</head>
+<body>
+
+    <!-- Loading Overlay -->
+    <div id="loadingOverlay" class="loading-overlay">
+        <div class="loading-spinner"></div>
+    </div>
+
+    <!-- Background Animated Orbs -->
+    <div class="bg-orbs">
+        <div class="orb orb-1"></div>
+        <div class="orb orb-2"></div>
+        <div class="orb orb-3"></div>
+    </div>
+
+    <!-- ===== HEADER ===== -->
+    <header class="header">
+        <div class="header-left">
+            <div class="logo">
+                <div class="logo-icon">
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                </div>
+                <h1>AccentFlow</h1>
+                <span class="logo-badge">Beta</span>
+            </div>
+        </div>
+        <div class="header-right">
+            <div class="status-indicator">
+                <span class="status-dot" id="statusDot"></span>
+                <span class="status-text" id="statusText">Ready</span>
+            </div>
+            <button class="btn-icon" id="settingsToggle" title="Toggle Settings">
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M19.14 12.94c.04-.3.06-.61.06-.94 0-.32-.02-.64-.07-.94l2.03-1.58a.49.49 0 00.12-.61l-1.92-3.32a.488.488 0 00-.59-.22l-2.39.96c-.5-.38-1.03-.7-1.62-.94l-.36-2.54a.484.484 0 00-.48-.41h-3.84c-.24 0-.43.17-.47.41l-.36 2.54c-.59.24-1.13.57-1.62.94l-2.39-.96c-.22-.08-.47 0-.59.22L2.74 8.87c-.12.21-.08.47.12.61l2.03 1.58c-.05.3-.07.62-.07.94s.02.64.07.94l-2.03 1.58a.49.49 0 00-.12.61l1.92 3.32c.12.22.37.29.59.22l2.39-.96c.5.38 1.03.7 1.62.94l.36 2.54c.05.24.24.41.48.41h3.84c.24 0 .44-.17.47-.41l.36-2.54c.59-.24 1.13-.56 1.62-.94l2.39.96c.22.08.47 0 .59-.22l1.92-3.32c.12-.22.07-.47-.12-.61l-2.01-1.58zM12 15.6c-1.98 0-3.6-1.62-3.6-3.6s1.62-3.6 3.6-3.6 3.6 1.62 3.6 3.6-1.62 3.6-3.6 3.6z"/>
+                </svg>
+            </button>
+        </div>
+    </header>
+
+    <!-- ===== MAIN CONTENT ===== -->
+    <main class="main-content">
+
+        <!-- Browser Compatibility Warning -->
+        <div id="browserWarning" class="browser-warning">
+            ⚠️ <strong>Browser Not Supported:</strong> AccentFlow requires <strong>Google Chrome</strong> for speech recognition.
+            Please open this page in Chrome to use the app.
+        </div>
+
+        <!-- ===== CONTROL PANEL ===== -->
+        <section class="control-panel glass-card">
+            <div class="control-center">
+                <button id="mainToggle" class="main-btn" title="Start/Stop (Space)">
+                    <div class="btn-pulse"></div>
+                    <!-- Microphone Icon -->
+                    <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                        <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                        <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                    </svg>
+                </button>
+                <p class="control-status" id="controlStatus">Press to Start</p>
+                <div class="keyboard-hint">or press <kbd>Space</kbd> to toggle · <kbd>Esc</kbd> to stop</div>
+            </div>
+
+            <!-- Audio Visualizer -->
+            <div class="visualizer-container">
+                <canvas id="visualizer" class="visualizer"></canvas>
+            </div>
+        </section>
+
+        <!-- ===== TRANSCRIPT PANEL ===== -->
+        <section class="transcript-panel">
+            <!-- Original Speech -->
+            <div class="transcript-column original glass-card">
+                <h3>
+                    <span class="icon-dot"></span>
+                    Your Speech
+                </h3>
+                <div class="transcript-content" id="originalTranscript">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                            <path d="M12 14c1.66 0 3-1.34 3-3V5c0-1.66-1.34-3-3-3S9 3.34 9 5v6c0 1.66 1.34 3 3 3z"/>
+                            <path d="M17 11c0 2.76-2.24 5-5 5s-5-2.24-5-5H5c0 3.53 2.61 6.43 6 6.92V21h2v-3.08c3.39-.49 6-3.39 6-6.92h-2z"/>
+                        </svg>
+                        <span>Your words will appear here</span>
+                    </div>
+                </div>
+            </div>
+
+            <!-- Converted Output -->
+            <div class="transcript-column converted glass-card">
+                <h3>
+                    <span class="icon-dot"></span>
+                    American Output
+                </h3>
+                <div class="transcript-content" id="convertedTranscript">
+                    <div class="empty-state">
+                        <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                        </svg>
+                        <span>American accent output here</span>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== VOICE SETTINGS ===== -->
+        <section class="settings-panel glass-card" id="settingsPanel">
+            <h3>
+                <svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 24 24">
+                    <path d="M3 17v2h6v-2H3zM3 5v2h10V5H3zm10 16v-2h8v-2h-8v-2h-2v6h2zM7 9v2H3v2h4v2h2V9H7zm14 4v-2H11v2h10zm-6-4h2V7h4V5h-4V3h-2v6z"/>
+                </svg>
+                Voice Settings
+            </h3>
+            <div class="settings-grid">
+                <!-- Voice Selection -->
+                <div class="setting-group">
+                    <label for="voiceSelect">Voice</label>
+                    <select id="voiceSelect">
+                        <option>Loading voices...</option>
+                    </select>
+                </div>
+
+                <!-- Speed -->
+                <div class="setting-group">
+                    <label for="speedSlider">Speed</label>
+                    <div class="slider-wrapper">
+                        <input type="range" id="speedSlider" min="0.5" max="2" step="0.1" value="1">
+                        <span class="slider-value" id="speedValue">1.0x</span>
+                    </div>
+                </div>
+
+                <!-- Pitch -->
+                <div class="setting-group">
+                    <label for="pitchSlider">Pitch</label>
+                    <div class="slider-wrapper">
+                        <input type="range" id="pitchSlider" min="0.5" max="2" step="0.1" value="1">
+                        <span class="slider-value" id="pitchValue">1.0</span>
+                    </div>
+                </div>
+
+                <!-- Volume -->
+                <div class="setting-group">
+                    <label for="volumeSlider">Volume</label>
+                    <div class="slider-wrapper">
+                        <input type="range" id="volumeSlider" min="0" max="1" step="0.1" value="1">
+                        <span class="slider-value" id="volumeValue">100%</span>
+                    </div>
+                </div>
+
+                <!-- Preview Button -->
+                <div class="btn-preview-full">
+                    <button id="previewVoice" class="btn-secondary">
+                        <svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="currentColor">
+                            <path d="M3 9v6h4l5 5V4L7 9H3zm13.5 3c0-1.77-1.02-3.29-2.5-4.03v8.05c1.48-.73 2.5-2.25 2.5-4.02zM14 3.23v2.06c2.89.86 5 3.54 5 6.71s-2.11 5.85-5 6.71v2.06c4.01-.91 7-4.49 7-8.77s-2.99-7.86-7-8.77z"/>
+                        </svg>
+                        Preview Voice
+                    </button>
+                </div>
+            </div>
+        </section>
+
+        <!-- ===== SETUP GUIDE ===== -->
+        <section class="setup-guide glass-card" id="setupGuide">
+            <div class="guide-header" id="guideToggle">
+                <h3>📋 Windows Setup Guide — Connect to ViciDial</h3>
+                <span class="guide-chevron" id="guideChevron">▼</span>
+            </div>
+            <div class="guide-content" id="guideContent">
+                <div class="guide-step">
+                    <div class="step-number">1</div>
+                    <div class="step-content">
+                        <h4>Install VB-Audio Virtual Cable</h4>
+                        <p>Download the free VB-Cable driver from
+                            <a href="https://vb-audio.com/Cable/" target="_blank" rel="noopener">vb-audio.com/Cable</a>.
+                            Run the installer <strong>as Administrator</strong> and restart your computer.
+                            This creates a virtual audio device called <code>CABLE Input</code> / <code>CABLE Output</code>.
+                        </p>
+                    </div>
+                </div>
+                <div class="guide-step">
+                    <div class="step-number">2</div>
+                    <div class="step-content">
+                        <h4>Open AccentFlow in Google Chrome</h4>
+                        <p>Open this page (<code>index.html</code>) in <strong>Google Chrome</strong>.
+                            Chrome is required for speech recognition to work. Allow microphone access when prompted.</p>
+                    </div>
+                </div>
+                <div class="guide-step">
+                    <div class="step-number">3</div>
+                    <div class="step-content">
+                        <h4>Set Chrome Audio Output to VB-Cable</h4>
+                        <p>On Windows 10/11: Go to <code>Settings → System → Sound → Volume Mixer</code>
+                            (or <code>App volume and device preferences</code>). Find <strong>Google Chrome</strong>
+                            and set its <strong>Output</strong> device to <code>CABLE Input (VB-Audio Virtual Cable)</code>.
+                            This routes AccentFlow's voice output through the virtual cable.</p>
+                    </div>
+                </div>
+                <div class="guide-step">
+                    <div class="step-number">4</div>
+                    <div class="step-content">
+                        <h4>Open ViciDial in Microsoft Edge</h4>
+                        <p>Open ViciDial in <strong>Microsoft Edge</strong> (or another browser).
+                            In ViciDial's audio settings, set the <strong>microphone/input</strong> to
+                            <code>CABLE Output (VB-Audio Virtual Cable)</code>.
+                            This makes ViciDial think the American accent TTS is your microphone!</p>
+                    </div>
+                </div>
+                <div class="guide-step">
+                    <div class="step-number">5</div>
+                    <div class="step-content">
+                        <h4>Test Everything</h4>
+                        <p>Click the <strong>mic button</strong> above and start speaking.
+                            You should see your words transcribed, then hear them replayed in an American accent.
+                            On ViciDial, the customer should hear the American accent voice instead of yours.
+                            Adjust voice, speed, and pitch using the settings above.</p>
+                    </div>
+                </div>
+                <div class="guide-step">
+                    <div class="step-number">6</div>
+                    <div class="step-content">
+                        <h4>Troubleshooting</h4>
+                        <p>
+                            <strong>No voices loading?</strong> Make sure you're using Chrome. Try refreshing the page.<br>
+                            <strong>Mic not working?</strong> Check Chrome's address bar for a microphone icon — click it to allow access.<br>
+                            <strong>ViciDial can't hear output?</strong> Verify VB-Cable is installed and Chrome's output is set to CABLE Input in Windows Sound Mixer.<br>
+                            <strong>Too much delay?</strong> Try increasing the speed slider to 1.2x or 1.3x to compensate.
+                        </p>
+                    </div>
+                </div>
+            </div>
+        </section>
+
+    </main>
+
+    <!-- Toast Notification Container -->
+    <div id="toastContainer" class="toast-container"></div>
+
+    <!-- Footer -->
+    <footer class="footer">
+        <p>AccentFlow v1.0 — Real-Time Voice Accent Converter for Call Centers</p>
+        <p>Built with ❤️ using Web Speech API · Works best in Google Chrome</p>
+    </footer>
+
+    <!-- Scripts -->
+    <script src="js/visualizer.js"></script>
+    <script src="js/speech.js"></script>
+    <script src="js/app.js"></script>
+
+</body>
+</html>
