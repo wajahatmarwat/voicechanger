@@ -104,8 +104,26 @@
             }
 
             // Build fake mic stream: TTS audio track + real video (if any)
-            const out = new MediaStream();
-            streamDest.stream.getAudioTracks().forEach(t => out.addTrack(t));
+            const fakeTrack = streamDest.stream.getAudioTracks()[0];
+            const realTrack = realStream.getAudioTracks()[0];
+
+            if (fakeTrack && realTrack) {
+                // Spoof properties so WhatsApp doesn't reject the track
+                Object.defineProperty(fakeTrack, 'label', { get: () => realTrack.label });
+                Object.defineProperty(fakeTrack, 'id', { get: () => realTrack.id });
+                fakeTrack.getSettings = () => realTrack.getSettings();
+                fakeTrack.getCapabilities = () => {
+                    return realTrack.getCapabilities ? realTrack.getCapabilities() : {};
+                };
+                
+                const originalStop = fakeTrack.stop.bind(fakeTrack);
+                fakeTrack.stop = () => {
+                    realTrack.stop();
+                    originalStop();
+                };
+            }
+
+            const out = new MediaStream([fakeTrack]);
             realStream.getVideoTracks().forEach(t => out.addTrack(t));
 
             // Keep real stream reference so mic permission stays granted
