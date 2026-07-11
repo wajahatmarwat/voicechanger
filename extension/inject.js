@@ -122,6 +122,18 @@
         }
     };
 
+    // Also override legacy methods if they exist
+    if (navigator.getUserMedia) {
+        navigator.getUserMedia = function(constraints, success, error) {
+            navigator.mediaDevices.getUserMedia(constraints).then(success).catch(error);
+        };
+    }
+    if (navigator.webkitGetUserMedia) {
+        navigator.webkitGetUserMedia = function(constraints, success, error) {
+            navigator.mediaDevices.getUserMedia(constraints).then(success).catch(error);
+        };
+    }
+
     // ══════════════════════════════════════════════════════
     //  TTS — Web SpeechSynthesis (plays locally + through stream)
     //  Plays through:
