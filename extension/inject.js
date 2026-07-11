@@ -1,38 +1,38 @@
 /**
- * AccentFlow Chrome Extension — Inject Script (Dual Mode)
+ * AccentFlow Chrome Extension — Inject Script v3 (Reliable Dual-Pipeline)
  *
- * MODE 1 — Direct Stream Injection (ViciDial, simple apps):
- *   Overrides getUserMedia → returns AudioContext stream → TTS audio flows through it
- *   Works when the app passes getUserMedia stream directly to WebRTC
- *   → No VB-Cable or Stereo Mix needed ✅
+ * HOW IT WORKS:
+ *  1. RTCPeerConnection.addTrack is intercepted at the deepest level.
+ *     When WhatsApp tries to send ANY audio to the network, we silently
+ *     replace it with our TTS AudioContext stream.
  *
- * MODE 2 — Local Playback (WhatsApp, Google Meet, complex apps):
- *   TTS plays through system speakers
- *   User routes audio via Windows Stereo Mix or VB-Cable
+ *  2. getUserMedia is also intercepted as a fallback for simpler apps.
  *
- * The extension tries Mode 1 first. If the app still uses the real mic
- * (detected when no conversion is heard), user can switch to Mode 2.
+ *  3. TTS is generated via Web SpeechSynthesis (speaks through speakers
+ *     locally so you can monitor) AND simultaneously via background
+ *     Google TTS fetch which gets piped directly into the WebRTC stream.
+ *
+ *  Both pipelines fire in parallel — whichever reaches the caller wins.
  */
 
 (function () {
     'use strict';
 
-    if (window.__accentflow_dual) return;
-    window.__accentflow_dual = true;
+    if (window.__accentflow_v3) return;
+    window.__accentflow_v3 = true;
 
-    // ── State ─────────────────────────────────────────────
-    let isActive   = false;
-    let mode1Active = false; // true = getUserMedia was intercepted → don't echo locally
-    let audioCtx   = null;
-    let streamDest = null;
+    // ── State ──────────────────────────────────────────────────────────
+    let isActive    = false;
+    let audioCtx    = null;
+    let streamDest  = null;
     let recognition = null;
-    let settings   = { rate: 1.0, volume: 1.0, pitch: 1.0, gender: 'male' };
-    let voices     = [];
+    let settings    = { rate: 1.0, volume: 1.0, pitch: 1.0, gender: 'male' };
+    let voices      = [];
 
-    // ── Save original getUserMedia ─────────────────────────
+    // ── Save originals ─────────────────────────────────────────────────
     const _origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
 
-    // ── Load voices ────────────────────────────────────────
+    // ── Voices ─────────────────────────────────────────────────────────
     function loadVoices() {
         const v = window.speechSynthesis.getVoices();
         if (v.length) voices = v;
@@ -40,244 +40,196 @@
     window.speechSynthesis.onvoiceschanged = loadVoices;
     loadVoices();
 
-    // ── Find best voice for gender ─────────────────────────
     function findVoice(gender) {
         if (!voices.length) voices = window.speechSynthesis.getVoices();
-        const male   = ['David', 'Mark', 'Guy', 'James', 'Male', 'Ryan', 'Eric'];
-        const female = ['Zira', 'Jenny', 'Aria', 'Ana', 'Female', 'Michelle', 'Susan'];
-        const kws    = gender === 'male' ? male : female;
+        const maleKws   = ['David', 'Mark', 'Guy', 'James', 'Ryan', 'Eric', 'Male'];
+        const femaleKws = ['Zira', 'Jenny', 'Aria', 'Ana', 'Michelle', 'Susan', 'Female'];
+        const kws = gender === 'male' ? maleKws : femaleKws;
         for (const kw of kws) {
             const v = voices.find(v => v.lang.startsWith('en-US') && v.name.includes(kw));
             if (v) return v;
         }
         return voices.find(v => v.lang.startsWith('en-US')) ||
-               voices.find(v => v.lang.startsWith('en'))    || null;
+               voices.find(v => v.lang.startsWith('en')) || null;
     }
 
-    // ══════════════════════════════════════════════════════
-    //  AudioContext Setup (created inside getUserMedia — user gesture chain ✅)
-    // ══════════════════════════════════════════════════════
-    function setupAudioContext(realStream) {
-        if (audioCtx) return;
+    // ══════════════════════════════════════════════════════════════════
+    //  AudioContext — shared, created on first user gesture
+    // ══════════════════════════════════════════════════════════════════
+    function ensureAudioContext() {
+        if (audioCtx && audioCtx.state !== 'closed') return;
         try {
-            audioCtx   = new AudioContext(); // let browser pick default sample rate
+            audioCtx   = new AudioContext();
             streamDest = audioCtx.createMediaStreamDestination();
 
-            if (realStream) {
-                // BUGFIX: Connect real mic to AudioContext but MUTE it.
-                // This forces WebAudio to use the hardware clock of the real mic.
-                // Without this, WebRTC often drops synthetic audio streams because
-                // they lack physical hardware timing sync!
-                const micSource = audioCtx.createMediaStreamSource(realStream);
-                const muteGain = audioCtx.createGain();
-                muteGain.gain.value = 0; // Mute the real voice!
-                micSource.connect(muteGain);
-                muteGain.connect(streamDest);
-            }
-
-            // Near-silent oscillator keeps stream "alive"
-            const osc  = audioCtx.createOscillator();
-            const sg   = audioCtx.createGain();
+            // Near-silent oscillator keeps stream alive (prevents WebRTC
+            // from flagging stream as inactive and silencing it)
+            const osc = audioCtx.createOscillator();
+            const sg  = audioCtx.createGain();
             sg.gain.value = 0.00001;
             osc.connect(sg);
             sg.connect(streamDest);
             osc.start();
-            console.log('[AccentFlow] ✅ AudioContext created (Hardware clock synced)');
+
+            console.log('[AccentFlow] AudioContext ready, sampleRate=' + audioCtx.sampleRate);
         } catch (e) {
-            console.error('[AccentFlow] AudioContext error:', e.message);
+            console.error('[AccentFlow] AudioContext failed:', e);
         }
     }
 
-    // ══════════════════════════════════════════════════════
-    //  MODE 1: getUserMedia Override
-    //  ViciDial and simple apps use this stream directly for WebRTC
-    //  → TTS audio in this stream → caller hears it ✅
-    // ══════════════════════════════════════════════════════
-    const customGUM = async function (constraints) {
-        if (!isActive || !constraints?.audio) {
-            return _origGUM.call(this || navigator.mediaDevices, constraints);
-        }
-
-        console.log('[AccentFlow] 🎤 getUserMedia intercepted (Mode 1 — Direct Injection)');
-        mode1Active = true;
-
-        try {
-            // Get real mic (keeps permission valid + keeps stream object real)
-            const realStream = await _origGUM.call(this || navigator.mediaDevices, {
-                audio: { echoCancellation: true, noiseSuppression: true },
-                video: !!(constraints.video),
-            });
-
-            // Create AudioContext HERE — inside getUserMedia = user gesture chain ✅
-            setupAudioContext(realStream);
-
-            if (audioCtx.state === 'suspended') {
-                await audioCtx.resume();
-            }
-
-            // Build fake mic stream: TTS audio track + real video (if any)
-            const fakeTrack = streamDest.stream.getAudioTracks()[0];
-            const realTrack = realStream.getAudioTracks()[0];
-
-            if (fakeTrack && realTrack) {
-                // Spoof properties so WhatsApp doesn't reject the track (wrapped in try/catch to prevent crashes)
-                try { Object.defineProperty(fakeTrack, 'label', { get: () => realTrack.label, configurable: true }); } catch (e) {}
-                try { Object.defineProperty(fakeTrack, 'id', { get: () => realTrack.id, configurable: true }); } catch (e) {}
-                
-                try { fakeTrack.getSettings = () => realTrack.getSettings(); } catch (e) {}
-                try { 
-                    fakeTrack.getCapabilities = () => {
-                        return realTrack.getCapabilities ? realTrack.getCapabilities() : {};
-                    };
-                } catch (e) {}
-                
-                try {
-                    const originalStop = fakeTrack.stop.bind(fakeTrack);
-                    fakeTrack.stop = () => {
-                        realTrack.stop();
-                        originalStop();
-                    };
-                } catch (e) {}
-            }
-
-            const out = new MediaStream([fakeTrack]);
-            realStream.getVideoTracks().forEach(t => out.addTrack(t));
-
-            // Keep real stream reference so mic permission stays granted
-            window.__accentflow_realStream = realStream;
-
-            console.log('[AccentFlow] ✅ Returning TTS stream — if caller hears nothing, enable Stereo Mix');
-            window.postMessage({ type: 'ACCENTFLOW_MIC_READY' }, '*');
-            return out;
-
-        } catch (err) {
-            console.error('[AccentFlow] getUserMedia error:', err);
-            window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic: ' + err.message }, '*');
-            return _origGUM.call(this || navigator.mediaDevices, constraints);
-        }
-    };
-
-    navigator.mediaDevices.getUserMedia = customGUM;
-    if (window.MediaDevices && MediaDevices.prototype) {
-        MediaDevices.prototype.getUserMedia = customGUM;
-    }
-
-    // Also override legacy methods if they exist
-    if (navigator.getUserMedia) {
-        navigator.getUserMedia = function(constraints, success, error) {
-            navigator.mediaDevices.getUserMedia(constraints).then(success).catch(error);
-        };
-    }
-    if (navigator.webkitGetUserMedia) {
-        navigator.webkitGetUserMedia = function(constraints, success, error) {
-            navigator.mediaDevices.getUserMedia(constraints).then(success).catch(error);
-        };
-    }
-
-    // ══════════════════════════════════════════════════════
-    //  Deep WebRTC Intercept (The Ultimate Bypass)
-    //  Swaps the track right as it enters the PeerConnection
-    // ══════════════════════════════════════════════════════
-    if (window.RTCPeerConnection) {
-        const origAddTrack = RTCPeerConnection.prototype.addTrack;
-        RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
-            if (isActive && track && track.kind === 'audio') {
-                console.log('[AccentFlow] 🔄 RTCPeerConnection.addTrack intercepted! Swapping payload.');
-                mode1Active = true;
-                
-                // Initialize WebAudio using their own track to ensure hardware clock sync
-                const tempStream = new MediaStream([track]);
-                setupAudioContext(tempStream);
-
-                const fakeTrack = streamDest.stream.getAudioTracks()[0];
-                if (fakeTrack) {
-                    return origAddTrack.call(this, fakeTrack, ...streams);
-                }
-            }
-            return origAddTrack.call(this, track, ...streams);
-        };
-    }
-
-    // ══════════════════════════════════════════════════════
-    //  TTS — Web SpeechSynthesis (plays locally + through stream)
-    //  Plays through:
-    //    1. audioCtx.destination → system speakers (MODE 2: Stereo Mix picks this up)
-    //    2. streamDest           → fake mic stream  (MODE 1: ViciDial/simple apps)
-    // ══════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════
+    //  TTS Speak — fires BOTH local speech AND pipes into stream
+    // ══════════════════════════════════════════════════════════════════
     function speak(text) {
         if (!text?.trim() || !isActive) return;
 
         window.speechSynthesis.cancel();
 
-        const utterance      = new SpeechSynthesisUtterance(text.trim());
-        utterance.lang       = 'en-US';
-        utterance.rate       = settings.rate   || 1.0;
-        utterance.volume     = settings.volume || 1.0;
-        utterance.pitch      = settings.pitch  || 1.0;
+        const utterance  = new SpeechSynthesisUtterance(text.trim());
+        utterance.lang   = 'en-US';
+        utterance.rate   = settings.rate   || 1.0;
+        utterance.volume = settings.volume || 1.0;
+        utterance.pitch  = settings.pitch  || 1.0;
 
         const voice = findVoice(settings.gender || 'male');
         if (voice) utterance.voice = voice;
 
         utterance.onstart = () => window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
         utterance.onend   = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+        utterance.onerror = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
 
-        if (!mode1Active) {
-            window.speechSynthesis.speak(utterance);
-        } else {
-            // If Mode 1 is active, we rely on ACCENTFLOW_PLAY_AUDIO from background
-            // to pipe the audio into the stream (bypassing CSP).
-            // Fire speaking event manually since speechSynthesis won't run.
-            window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
-        }
+        // Play locally through speakers so user can monitor
+        window.speechSynthesis.speak(utterance);
+
+        // ALSO pipe into WebRTC via background TTS fetch
+        // content.js relays ACCENTFLOW_FINAL_TEXT to background which fetches
+        // Google TTS MP3 and sends back ACCENTFLOW_PLAY_AUDIO
+        window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: text.trim() }, '*');
     }
 
-    // ── Pipe TTS audio into the fake mic stream (Mode 1 supplement) ──
-    async function playAudioBuffer(audioDataArray) {
-        if (!audioCtx || !streamDest) {
-            window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+    // ── Pipe background TTS audio into the WebRTC stream ──────────────
+    async function playAudioIntoStream(audioDataArray) {
+        if (!streamDest) {
+            console.warn('[AccentFlow] streamDest not ready');
             return;
         }
-
         try {
+            ensureAudioContext();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
 
-            const uint8 = new Uint8Array(audioDataArray);
-            const arrayBuf = uint8.buffer;
-
+            const arrayBuf = new Uint8Array(audioDataArray).buffer.slice(0);
             audioCtx.decodeAudioData(arrayBuf, (decoded) => {
                 const src  = audioCtx.createBufferSource();
                 src.buffer = decoded;
-                src.playbackRate.value = settings.rate || 1.0;
 
                 const gain = audioCtx.createGain();
-                gain.gain.value = settings.volume || 1.0;
+                gain.gain.value = 1.5; // boost slightly into stream
 
                 src.connect(gain);
-                gain.connect(streamDest); // → fake mic stream → ViciDial WebRTC ✅
-
-                src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+                gain.connect(streamDest);  // → WebRTC caller hears this ✅
                 src.start(0);
-            }, (err) => {
-                console.error('[AccentFlow] Audio decode error:', err);
-                window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
-            });
+                console.log('[AccentFlow] Audio piped into WebRTC stream ✅');
+            }, (err) => console.error('[AccentFlow] Decode error:', err));
         } catch (e) {
-            console.error('[AccentFlow] Audio playback error:', e);
-            window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+            console.error('[AccentFlow] Stream pipe error:', e);
         }
     }
 
-    // ══════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════
+    //  getUserMedia Override — returns TTS stream as mic
+    // ══════════════════════════════════════════════════════════════════
+    const customGUM = async function(constraints) {
+        if (!isActive || !constraints?.audio) {
+            return _origGUM.call(navigator.mediaDevices, constraints);
+        }
+        console.log('[AccentFlow] getUserMedia intercepted');
+
+        try {
+            const realStream = await _origGUM.call(navigator.mediaDevices, {
+                audio: { echoCancellation: true, noiseSuppression: true },
+                video: false,
+            });
+
+            ensureAudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            // Connect real mic (muted) for hardware clock timing
+            try {
+                const micSrc   = audioCtx.createMediaStreamSource(realStream);
+                const muteGain = audioCtx.createGain();
+                muteGain.gain.value = 0;
+                micSrc.connect(muteGain);
+                muteGain.connect(streamDest);
+            } catch(e) {}
+
+            window.__accentflow_realStream = realStream;
+            window.postMessage({ type: 'ACCENTFLOW_MIC_READY' }, '*');
+            console.log('[AccentFlow] Returning TTS stream as mic ✅');
+            return streamDest.stream;
+
+        } catch (err) {
+            console.error('[AccentFlow] GUM fallback:', err.message);
+            return _origGUM.call(navigator.mediaDevices, constraints);
+        }
+    };
+
+    // Patch all getUserMedia entry points
+    navigator.mediaDevices.getUserMedia = customGUM;
+    try { MediaDevices.prototype.getUserMedia = customGUM; } catch(e) {}
+    try {
+        if (navigator.getUserMedia) navigator.getUserMedia = (c,s,e) => customGUM(c).then(s).catch(e);
+        if (navigator.webkitGetUserMedia) navigator.webkitGetUserMedia = (c,s,e) => customGUM(c).then(s).catch(e);
+    } catch(e) {}
+
+    // ══════════════════════════════════════════════════════════════════
+    //  RTCPeerConnection.addTrack — deepest intercept
+    //  Lets WhatsApp use the real mic for all its checks, but swaps
+    //  the audio payload right before it goes over the network
+    // ══════════════════════════════════════════════════════════════════
+    try {
+        const origAddTrack = RTCPeerConnection.prototype.addTrack;
+        RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
+            if (isActive && track?.kind === 'audio') {
+                console.log('[AccentFlow] RTCPeerConnection.addTrack — swapping audio track ✅');
+
+                ensureAudioContext();
+
+                // Use their hardware track as clock source (muted)
+                try {
+                    const hwStream = new MediaStream([track]);
+                    const hwSrc    = audioCtx.createMediaStreamSource(hwStream);
+                    const hwMute   = audioCtx.createGain();
+                    hwMute.gain.value = 0;
+                    hwSrc.connect(hwMute);
+                    hwMute.connect(streamDest);
+                } catch(e) {}
+
+                const fakeTrack = streamDest.stream.getAudioTracks()[0];
+                if (fakeTrack) {
+                    // Best-effort metadata spoof
+                    try { Object.defineProperty(fakeTrack, 'label', { get: () => track.label, configurable: true }); } catch(e) {}
+                    try { Object.defineProperty(fakeTrack, 'id', { get: () => track.id, configurable: true }); } catch(e) {}
+                    try { fakeTrack.getSettings = () => track.getSettings(); } catch(e) {}
+                    return origAddTrack.call(this, fakeTrack, ...streams);
+                }
+            }
+            return origAddTrack.call(this, track, ...streams);
+        };
+        console.log('[AccentFlow] RTCPeerConnection.addTrack intercepted ✅');
+    } catch(e) {
+        console.error('[AccentFlow] RTCPeerConnection intercept failed:', e);
+    }
+
+    // ══════════════════════════════════════════════════════════════════
     //  Speech Recognition (STT)
-    // ══════════════════════════════════════════════════════
+    // ══════════════════════════════════════════════════════════════════
     function startSTT() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
-            window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Use Google Chrome.' }, '*');
+            window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Use Google Chrome for speech recognition.' }, '*');
             return;
         }
         stopSTT();
-
         recognition = new SR();
         recognition.continuous     = true;
         recognition.interimResults = true;
@@ -293,59 +245,63 @@
             if (interim) window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
             if (final?.trim()) {
                 const clean = final.trim();
-                window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: clean }, '*');
                 speak(clean);
             }
         };
 
         recognition.onend = () => {
             if (isActive) setTimeout(() => {
-                if (isActive) try { recognition.start(); } catch (_) {}
+                if (isActive) try { recognition.start(); } catch(_) {}
             }, 200);
         };
 
         recognition.onerror = (e) => {
             if (e.error === 'no-speech' || e.error === 'aborted') return;
             if (e.error === 'not-allowed') {
-                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic denied. Click lock → Allow mic.' }, '*');
+                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic denied. Click the lock icon in the address bar → Allow mic.' }, '*');
             }
         };
 
-        try { recognition.start(); } catch (_) {}
+        try { recognition.start(); } catch(_) {}
     }
 
     function stopSTT() {
-        if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
+        if (recognition) { try { recognition.stop(); } catch(_) {} recognition = null; }
     }
 
-    // ── Message Listener ──────────────────────────────────
+    // ── Message Bus ────────────────────────────────────────────────────
     window.addEventListener('message', (e) => {
         if (e.source !== window || !e.data?.type) return;
+
         switch (e.data.type) {
             case 'ACCENTFLOW_ACTIVATE':
                 isActive = true;
                 loadVoices();
+                ensureAudioContext();
                 startSTT();
-                console.log('[AccentFlow] ✅ Activated — Dual mode (Mode1: getUserMedia + Mode2: Speakers)');
+                console.log('[AccentFlow] Activated ✅');
                 window.postMessage({ type: 'ACCENTFLOW_READY' }, '*');
                 break;
+
             case 'ACCENTFLOW_DEACTIVATE':
                 isActive = false;
                 stopSTT();
                 window.speechSynthesis.cancel();
                 if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; streamDest = null; }
-                console.log('[AccentFlow] ⏹ Deactivated');
+                console.log('[AccentFlow] Deactivated');
                 break;
+
             case 'ACCENTFLOW_UPDATE_SETTINGS':
                 if (e.data.settings) settings = { ...settings, ...e.data.settings };
                 break;
+
             case 'ACCENTFLOW_PLAY_AUDIO':
-                if (mode1Active && e.data.audioData) {
-                    playAudioBuffer(e.data.audioData);
+                if (e.data.audioData) {
+                    playAudioIntoStream(e.data.audioData);
                 }
                 break;
         }
     });
 
-    console.log('[AccentFlow] 🚀 Dual-mode inject loaded (getUserMedia injection + SpeechSynthesis)');
+    console.log('[AccentFlow] v3 loaded — RTCPeerConnection + getUserMedia + SpeechSynthesis pipeline active');
 })();
