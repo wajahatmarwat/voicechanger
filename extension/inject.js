@@ -21,12 +21,13 @@
     window.__accentflow_dual = true;
 
     // ── State ─────────────────────────────────────────────
-    let isActive  = false;
-    let audioCtx  = null;
+    let isActive   = false;
+    let mode1Active = false; // true = getUserMedia was intercepted → don't echo locally
+    let audioCtx   = null;
     let streamDest = null;
     let recognition = null;
-    let settings  = { rate: 1.0, volume: 1.0, pitch: 1.0, gender: 'male' };
-    let voices    = [];
+    let settings   = { rate: 1.0, volume: 1.0, pitch: 1.0, gender: 'male' };
+    let voices     = [];
 
     // ── Save original getUserMedia ─────────────────────────
     const _origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
@@ -86,6 +87,7 @@
         }
 
         console.log('[AccentFlow] 🎤 getUserMedia intercepted (Mode 1 — Direct Injection)');
+        mode1Active = true;
 
         try {
             // Get real mic (keeps permission valid + keeps stream object real)
@@ -143,9 +145,15 @@
         utterance.onstart = () => window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
         utterance.onend   = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
 
-        window.speechSynthesis.speak(utterance);
+        if (!mode1Active) {
+            window.speechSynthesis.speak(utterance);
+        } else {
+            // If Mode 1 is active, we just pipe to stream. No local echo.
+            // Fire speaking events manually since speechSynthesis won't run.
+            window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
+        }
 
-        // MODE 1 bonus: also try to pipe TTS through AudioContext stream
+        // MODE 1 bonus: pipe TTS through AudioContext stream
         // by fetching from Google Translate TTS (works for ViciDial stream injection)
         if (audioCtx && streamDest) {
             pipeTextToStream(text.trim());
@@ -158,10 +166,16 @@
             const encoded = encodeURIComponent(text);
             const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`;
             const resp = await fetch(url);
-            if (!resp.ok) return;
+            if (!resp.ok) {
+                if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+                return;
+            }
             const arrayBuf = await resp.arrayBuffer();
 
-            if (!audioCtx) return;
+            if (!audioCtx) {
+                if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+                return;
+            }
             if (audioCtx.state === 'suspended') await audioCtx.resume();
 
             audioCtx.decodeAudioData(arrayBuf, (decoded) => {
@@ -174,11 +188,15 @@
 
                 src.connect(gain);
                 gain.connect(streamDest); // → fake mic stream → ViciDial WebRTC ✅
-                // Note: NOT connected to audioCtx.destination to avoid double audio
+
+                if (mode1Active) {
+                    src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+                }
                 src.start(0);
             });
         } catch (e) {
-            // Silent fail — SpeechSynthesis already handling local playback
+            // Silent fail — if Mode 1 active, ensure UI resets
+            if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
         }
     }
 
