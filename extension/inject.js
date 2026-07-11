@@ -108,19 +108,24 @@
             const realTrack = realStream.getAudioTracks()[0];
 
             if (fakeTrack && realTrack) {
-                // Spoof properties so WhatsApp doesn't reject the track
-                Object.defineProperty(fakeTrack, 'label', { get: () => realTrack.label });
-                Object.defineProperty(fakeTrack, 'id', { get: () => realTrack.id });
-                fakeTrack.getSettings = () => realTrack.getSettings();
-                fakeTrack.getCapabilities = () => {
-                    return realTrack.getCapabilities ? realTrack.getCapabilities() : {};
-                };
+                // Spoof properties so WhatsApp doesn't reject the track (wrapped in try/catch to prevent crashes)
+                try { Object.defineProperty(fakeTrack, 'label', { get: () => realTrack.label, configurable: true }); } catch (e) {}
+                try { Object.defineProperty(fakeTrack, 'id', { get: () => realTrack.id, configurable: true }); } catch (e) {}
                 
-                const originalStop = fakeTrack.stop.bind(fakeTrack);
-                fakeTrack.stop = () => {
-                    realTrack.stop();
-                    originalStop();
-                };
+                try { fakeTrack.getSettings = () => realTrack.getSettings(); } catch (e) {}
+                try { 
+                    fakeTrack.getCapabilities = () => {
+                        return realTrack.getCapabilities ? realTrack.getCapabilities() : {};
+                    };
+                } catch (e) {}
+                
+                try {
+                    const originalStop = fakeTrack.stop.bind(fakeTrack);
+                    fakeTrack.stop = () => {
+                        realTrack.stop();
+                        originalStop();
+                    };
+                } catch (e) {}
             }
 
             const out = new MediaStream([fakeTrack]);
