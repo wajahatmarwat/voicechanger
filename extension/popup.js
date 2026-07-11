@@ -28,10 +28,31 @@ document.addEventListener('DOMContentLoaded', () => {
     let isActive = false;
     let settings = { rate: 1.0, pitch: 1.0, volume: 1.0, gender: 'male' };
 
-    // ── Connect to Background ───────────────────────────
-    const port = chrome.runtime.connect({ name: 'accentflow-popup' });
+    // ── Connect to Background (with auto-reconnect for MV3 service worker) ──
+    let port = null;
 
-    port.onMessage.addListener((msg) => {
+    function connectPort() {
+        port = chrome.runtime.connect({ name: 'accentflow-popup' });
+        port.onMessage.addListener(handleMessage);
+        port.onDisconnect.addListener(() => {
+            // Service worker went to sleep — reconnect silently
+            port = null;
+            setTimeout(connectPort, 500);
+        });
+    }
+    connectPort();
+
+    function safePostMessage(msg) {
+        try {
+            if (port) port.postMessage(msg);
+        } catch(e) {
+            // Port was disconnected; reconnect and retry once
+            connectPort();
+            setTimeout(() => { try { if (port) port.postMessage(msg); } catch(_) {} }, 600);
+        }
+    }
+
+    function handleMessage(msg) {
         switch (msg.type) {
             case 'state':
                 if (msg.data.isActive) { isActive = true; setActiveUI(); }
@@ -70,7 +91,7 @@ document.addEventListener('DOMContentLoaded', () => {
                 showToast('❌ ' + msg.data, 'error');
                 break;
         }
-    });
+    }
 
     // ── UI State ────────────────────────────────────────
     function setActiveUI() {
@@ -125,7 +146,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // ── Send Settings to Content Script ─────────────────
     function pushSettings() {
-        port.postMessage({ action: 'updateSettings', settings });
+        safePostMessage({ action: 'updateSettings', settings });
         chrome.storage.local.set({ accentflow_settings: settings });
     }
 
@@ -133,7 +154,7 @@ document.addEventListener('DOMContentLoaded', () => {
 
     // Start / Stop button
     mainBtn.addEventListener('click', () => {
-        port.postMessage({ action: isActive ? 'deactivate' : 'activate' });
+        safePostMessage({ action: isActive ? 'deactivate' : 'activate' });
     });
 
     // Gender toggle — Male

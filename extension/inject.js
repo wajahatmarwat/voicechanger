@@ -191,31 +191,64 @@
         RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
             if (isActive && track?.kind === 'audio') {
                 console.log('[AccentFlow] RTCPeerConnection.addTrack — swapping audio track ✅');
-
                 ensureAudioContext();
-
-                // Use their hardware track as clock source (muted)
                 try {
-                    const hwStream = new MediaStream([track]);
-                    const hwSrc    = audioCtx.createMediaStreamSource(hwStream);
-                    const hwMute   = audioCtx.createGain();
+                    const hwSrc  = audioCtx.createMediaStreamSource(new MediaStream([track]));
+                    const hwMute = audioCtx.createGain();
                     hwMute.gain.value = 0;
                     hwSrc.connect(hwMute);
                     hwMute.connect(streamDest);
                 } catch(e) {}
-
                 const fakeTrack = streamDest.stream.getAudioTracks()[0];
                 if (fakeTrack) {
-                    // Best-effort metadata spoof
                     try { Object.defineProperty(fakeTrack, 'label', { get: () => track.label, configurable: true }); } catch(e) {}
-                    try { Object.defineProperty(fakeTrack, 'id', { get: () => track.id, configurable: true }); } catch(e) {}
                     try { fakeTrack.getSettings = () => track.getSettings(); } catch(e) {}
                     return origAddTrack.call(this, fakeTrack, ...streams);
                 }
             }
             return origAddTrack.call(this, track, ...streams);
         };
-        console.log('[AccentFlow] RTCPeerConnection.addTrack intercepted ✅');
+
+        // WhatsApp uses addTransceiver (NOT addTrack) for voice calls!
+        const origAddTransceiver = RTCPeerConnection.prototype.addTransceiver;
+        RTCPeerConnection.prototype.addTransceiver = function(trackOrKind, init) {
+            if (isActive) {
+                const isAudio = trackOrKind === 'audio' ||
+                                (trackOrKind instanceof MediaStreamTrack && trackOrKind.kind === 'audio');
+                if (isAudio) {
+                    console.log('[AccentFlow] RTCPeerConnection.addTransceiver — swapping audio ✅');
+                    ensureAudioContext();
+                    if (trackOrKind instanceof MediaStreamTrack) {
+                        try {
+                            const hwSrc  = audioCtx.createMediaStreamSource(new MediaStream([trackOrKind]));
+                            const hwMute = audioCtx.createGain();
+                            hwMute.gain.value = 0;
+                            hwSrc.connect(hwMute);
+                            hwMute.connect(streamDest);
+                        } catch(e) {}
+                    }
+                    const fakeTrack = streamDest.stream.getAudioTracks()[0];
+                    if (fakeTrack) {
+                        return origAddTransceiver.call(this, fakeTrack, init);
+                    }
+                }
+            }
+            return origAddTransceiver.call(this, trackOrKind, init);
+        };
+
+        // Also intercept replaceTrack (used when mic changes mid-call)
+        const origReplaceTrack = RTCRtpSender.prototype.replaceTrack;
+        RTCRtpSender.prototype.replaceTrack = function(newTrack) {
+            if (isActive && newTrack?.kind === 'audio') {
+                console.log('[AccentFlow] RTCRtpSender.replaceTrack — swapping audio ✅');
+                ensureAudioContext();
+                const fakeTrack = streamDest?.stream.getAudioTracks()[0];
+                if (fakeTrack) return origReplaceTrack.call(this, fakeTrack);
+            }
+            return origReplaceTrack.call(this, newTrack);
+        };
+
+        console.log('[AccentFlow] RTCPeerConnection fully intercepted ✅');
     } catch(e) {
         console.error('[AccentFlow] RTCPeerConnection intercept failed:', e);
     }
