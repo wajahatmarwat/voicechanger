@@ -72,10 +72,25 @@
         <div class="settings-card">
             <div class="settings-title">⚙ Voice Settings</div>
 
+            <!-- Voice Gender -->
+            <div class="setting-row">
+                <label>Voice</label>
+                <div class="gender-toggle">
+                    <button class="gender-btn active" id="maleBtn" data-gender="male">👨 Male</button>
+                    <button class="gender-btn" id="femaleBtn" data-gender="female">👩 Female</button>
+                </div>
+            </div>
+
             <div class="setting-row">
                 <label>Speed</label>
                 <input type="range" id="speedSlider" min="0.5" max="2" step="0.1" value="1">
                 <span class="setting-value" id="speedValue">1.0x</span>
+            </div>
+
+            <div class="setting-row">
+                <label>Pitch</label>
+                <input type="range" id="pitchSlider" min="0.5" max="2" step="0.1" value="1">
+                <span class="setting-value" id="pitchValue">1.0</span>
             </div>
 
             <div class="setting-row">

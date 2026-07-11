@@ -1,25 +1,10 @@
 /**
- * AccentFlow Chrome Extension — Inject Script (Final/Stable)
+ * AccentFlow Chrome Extension — Inject Script (Stable + SpeechSynthesis)
  *
- * APPROACH: Local TTS playback only. NO WebRTC interception.
- *
- * Why no WebRTC interception?
- * - Apps like WhatsApp/Meet have complex internal WebRTC pipelines
- * - Intercepting addTransceiver/addTrack breaks SDP negotiation → calls stuck "connecting"
- * - Intercepting getUserMedia breaks voice message recording
- *
- * HOW TO ROUTE AUDIO TO CALLER:
- * This extension converts your speech to American-accent TTS and plays it through
- * your computer speakers. Use one of these to route it to WhatsApp/ViciDial:
- *
- * OPTION A (Recommended — No extra software):
- *   Windows Stereo Mix: Sound Settings → Recording → Enable "Stereo Mix"
- *   → Set WhatsApp microphone to "Stereo Mix"
- *
- * OPTION B (Most reliable):
- *   VB-Audio Cable: free download from vb-audio.com
- *   → Set Chrome audio output to "CABLE Input"
- *   → Set WhatsApp microphone to "CABLE Output"
+ * TTS now uses the browser's built-in Web Speech Synthesis API directly.
+ * - No network requests, no API keys, no audio buffers
+ * - Real male/female American English voices (from system/Chrome)
+ * - Audio plays through speakers → Stereo Mix → WhatsApp/ViciDial mic
  */
 
 (function () {
@@ -30,75 +15,95 @@
 
     // ── State ─────────────────────────────────────────────
     let isActive = false;
-    let audioCtx = null;
-    let settings = { rate: 1.0, volume: 1.0 };
     let recognition = null;
+    let settings = { rate: 1.0, volume: 1.0, pitch: 1.0, gender: 'male' };
+    let voices = [];
+    let voicesLoaded = false;
 
-    // ── AudioContext (created on first page click) ─────────
-    function initAudio() {
-        if (audioCtx) {
-            if (audioCtx.state === 'suspended') audioCtx.resume().catch(() => {});
-            return;
+    // ── Load Available Voices ─────────────────────────────
+    function loadVoices() {
+        voices = window.speechSynthesis.getVoices();
+        if (voices.length > 0) {
+            voicesLoaded = true;
+            // Send available US voices to popup for display
+            const usVoices = voices
+                .filter(v => v.lang.startsWith('en'))
+                .map(v => ({ name: v.name, lang: v.lang }));
+            window.postMessage({ type: 'ACCENTFLOW_VOICES', voices: usVoices }, '*');
         }
-        try {
-            audioCtx = new AudioContext({ sampleRate: 48000 });
-            console.log('[AccentFlow] ✅ AudioContext ready');
-        } catch (e) {
-            console.error('[AccentFlow] AudioContext error:', e.message);
+    }
+
+    // Voices load asynchronously on first call
+    window.speechSynthesis.onvoiceschanged = loadVoices;
+    loadVoices(); // try immediately too
+
+    // ── Voice Selection ────────────────────────────────────
+    function findBestVoice(gender) {
+        if (voices.length === 0) voices = window.speechSynthesis.getVoices();
+
+        // Priority lists for each gender — US English voices
+        const maleKeywords   = ['David', 'Mark', 'Guy', 'Male', 'James', 'Eric', 'Ryan', 'Andrew', 'Christopher'];
+        const femaleKeywords = ['Zira', 'Jenny', 'Aria', 'Ana', 'Female', 'Susan', 'Michelle', 'Elizabeth'];
+
+        const keywords = gender === 'male' ? maleKeywords : femaleKeywords;
+
+        // 1. Try exact keyword match in US English
+        for (const kw of keywords) {
+            const v = voices.find(v => v.lang.startsWith('en-US') && v.name.includes(kw));
+            if (v) return v;
         }
+        // 2. Try any en-US voice
+        const anyUS = voices.find(v => v.lang === 'en-US');
+        if (anyUS) return anyUS;
+        // 3. Try any English voice
+        const anyEn = voices.find(v => v.lang.startsWith('en'));
+        if (anyEn) return anyEn;
+
+        return null; // browser will use default
     }
 
-    function attachClickListener() {
-        document.addEventListener('click', initAudio, { capture: true });
-        document.addEventListener('touchend', initAudio, { capture: true });
-    }
+    // ── TTS — Web Speech Synthesis ────────────────────────
+    function speak(text) {
+        if (!text?.trim() || !isActive) return;
 
-    // ── TTS Playback (through local speakers) ─────────────
-    function playAudio(buffer) {
-        if (!audioCtx) {
-            // Try to create on play (may fail if no gesture, but worth trying)
-            try { audioCtx = new AudioContext(); } catch (e) { return; }
+        // Cancel any ongoing speech
+        window.speechSynthesis.cancel();
+
+        const utterance = new SpeechSynthesisUtterance(text.trim());
+        utterance.lang   = 'en-US';
+        utterance.rate   = settings.rate   || 1.0;
+        utterance.volume = settings.volume || 1.0;
+        utterance.pitch  = settings.pitch  || 1.0;
+
+        const voice = findBestVoice(settings.gender || 'male');
+        if (voice) {
+            utterance.voice = voice;
+            console.log('[AccentFlow] 🗣 Speaking with voice:', voice.name);
         }
-        const go = () => decode(buffer);
-        audioCtx.state === 'suspended' ? audioCtx.resume().then(go).catch(() => {}) : go();
+
+        utterance.onstart = () => window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
+        utterance.onend   = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+        utterance.onerror = (e) => {
+            console.error('[AccentFlow] TTS error:', e.error);
+            window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+        };
+
+        window.speechSynthesis.speak(utterance);
     }
 
-    function decode(buffer) {
-        audioCtx.decodeAudioData(buffer,
-            (decoded) => {
-                const src = audioCtx.createBufferSource();
-                src.buffer = decoded;
-                src.playbackRate.value = settings.rate;
-
-                const gain = audioCtx.createGain();
-                gain.gain.value = settings.volume;
-
-                src.connect(gain);
-                gain.connect(audioCtx.destination); // → plays through system speakers
-                // Stereo Mix / VB-Cable captures this and sends to WhatsApp as mic input
-
-                src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
-                src.start(0);
-                window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
-            },
-            (err) => {
-                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Decode failed: ' + err.message }, '*');
-            }
-        );
-    }
-
-    // ── Speech Recognition ────────────────────────────────
+    // ── Speech Recognition (STT) ──────────────────────────
     function startSTT() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
-            window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Use Google Chrome.' }, '*');
+            window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Use Google Chrome for speech recognition.' }, '*');
             return;
         }
         stopSTT();
+
         recognition = new SR();
-        recognition.continuous = true;
+        recognition.continuous     = true;
         recognition.interimResults = true;
-        recognition.lang = 'en-US';
+        recognition.lang           = 'en-US';
 
         recognition.onresult = (e) => {
             let interim = '', final = '';
@@ -107,20 +112,36 @@
                 if (e.results[i].isFinal) final += t;
                 else interim += t;
             }
-            if (interim) window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
-            if (final?.trim()) window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: final.trim() }, '*');
+
+            if (interim) {
+                window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
+            }
+            if (final?.trim()) {
+                const clean = final.trim();
+                window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: clean }, '*');
+                // Speak immediately via browser TTS (no network needed!)
+                speak(clean);
+            }
         };
 
         recognition.onend = () => {
-            if (isActive) setTimeout(() => { if (isActive) try { recognition.start(); } catch (_) {} }, 200);
+            if (isActive) {
+                setTimeout(() => {
+                    if (isActive) try { recognition.start(); } catch (_) {}
+                }, 200);
+            }
         };
 
         recognition.onerror = (e) => {
             if (e.error === 'no-speech' || e.error === 'aborted') return;
             if (e.error === 'not-allowed') {
-                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic denied. Click lock icon → Allow.' }, '*');
+                window.postMessage({
+                    type: 'ACCENTFLOW_ERROR',
+                    error: 'Mic permission denied. Click the lock icon → Allow microphone.',
+                }, '*');
             }
         };
+
         try { recognition.start(); } catch (_) {}
     }
 
@@ -131,28 +152,35 @@
     // ── Message Listener ──────────────────────────────────
     window.addEventListener('message', (e) => {
         if (e.source !== window || !e.data?.type) return;
+
         switch (e.data.type) {
             case 'ACCENTFLOW_ACTIVATE':
                 isActive = true;
-                attachClickListener();
+                loadVoices();
                 startSTT();
-                console.log('[AccentFlow] ✅ Activated — STT running, TTS plays via speakers');
+                console.log('[AccentFlow] ✅ Activated — STT + SpeechSynthesis TTS ready');
                 window.postMessage({ type: 'ACCENTFLOW_READY' }, '*');
                 break;
+
             case 'ACCENTFLOW_DEACTIVATE':
                 isActive = false;
                 stopSTT();
-                if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
+                window.speechSynthesis.cancel();
                 console.log('[AccentFlow] ⏹ Deactivated');
                 break;
-            case 'ACCENTFLOW_PLAY_AUDIO':
-                playAudio(new Uint8Array(e.data.audioData).buffer);
-                break;
+
             case 'ACCENTFLOW_UPDATE_SETTINGS':
-                if (e.data.settings) settings = { ...settings, ...e.data.settings };
+                if (e.data.settings) {
+                    settings = { ...settings, ...e.data.settings };
+                    console.log('[AccentFlow] Settings updated:', settings);
+                }
+                break;
+
+            // No longer used — kept for backward compat
+            case 'ACCENTFLOW_PLAY_AUDIO':
                 break;
         }
     });
 
-    console.log('[AccentFlow] 🚀 Stable inject.js loaded — STT + local TTS (no WebRTC intercept)');
+    console.log('[AccentFlow] 🚀 Stable inject loaded — SpeechSynthesis TTS (no network, male/female voices)');
 })();
