@@ -1,11 +1,12 @@
 {
     "manifest_version": 3,
-    "name": "AccentFlow — Voice Accent Converter",
+    "name": "AccentFlow Voice Accent Converter",
     "version": "1.0.0",
     "description": "Convert your accent to native American English in real-time. Built for call center professionals using ViciDial.",
     "permissions": [
         "storage",
-        "activeTab"
+        "activeTab",
+        "tabs"
     ],
     "host_permissions": [
         "https://translate.google.com/*",
@@ -19,12 +20,6 @@
         "service_worker": "background.js"
     },
     "content_scripts": [
-        {
-            "matches": ["<all_urls>"],
-            "js": ["inject.js"],
-            "run_at": "document_start",
-            "world": "MAIN"
-        },
         {
             "matches": ["<all_urls>"],
             "js": ["content.js"],
