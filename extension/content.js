@@ -11,9 +11,13 @@ window.addEventListener('message', (event) => {
     switch (event.data.type) {
         case 'ACCENTFLOW_FINAL_TEXT':
             // User spoke → send text to background for TTS conversion
-            chrome.runtime.sendMessage({
-                action: 'convertText',
-                text: event.data.text,
+            chrome.storage.local.get('accentflow_settings', (result) => {
+                const gender = result?.accentflow_settings?.gender || 'male';
+                chrome.runtime.sendMessage({
+                    action: 'convertText',
+                    text: event.data.text,
+                    gender: gender,
+                });
             });
             break;
 

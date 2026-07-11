@@ -14,41 +14,44 @@ let activeTabId = null;
  * Fetch TTS audio from Google Translate (free, no API key)
  * Returns American English audio as ArrayBuffer
  */
-async function fetchTTSAudio(text) {
-    // Google Translate TTS has a ~200 char limit per request
-    const chunks = splitText(text, 180);
+async function fetchTTSAudio(text, gender = 'male') {
+    const chunks = splitText(text, 200);
     const audioChunks = [];
 
+    // StreamElements TTS — free, reliable, Amazon Polly voices, no API key needed
+    // Brian = American male, Joanna = American female
+    const voice = gender === 'female' ? 'Joanna' : 'Brian';
+
     for (const chunk of chunks) {
-        const encoded = encodeURIComponent(chunk);
-        const url = `https://translate.google.com/translate_tts?ie=UTF-8&tl=en-US&client=tw-ob&q=${encoded}&ttsspeed=1`;
+        if (!chunk.trim()) continue;
+        const encoded = encodeURIComponent(chunk.trim());
+        const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encoded}`;
 
         try {
-            const response = await fetch(url, {
-                headers: {
-                    'User-Agent': 'Mozilla/5.0',
-                    'Referer': 'https://translate.google.com/',
-                },
-            });
+            const response = await fetch(url);
 
             if (!response.ok) {
-                throw new Error(`HTTP ${response.status}`);
+                throw new Error(`StreamElements TTS HTTP ${response.status}`);
             }
 
             const buffer = await response.arrayBuffer();
-            audioChunks.push(buffer);
+            if (buffer.byteLength > 100) {
+                audioChunks.push(buffer);
+                console.log(`[AccentFlow BG] TTS fetched OK (${buffer.byteLength} bytes)`);
+            }
         } catch (err) {
-            console.error('[AccentFlow BG] TTS fetch error:', err);
-            // Try fallback URL
+            console.error('[AccentFlow BG] StreamElements TTS failed:', err.message);
+            // Fallback: Google Translate TTS
             try {
                 const fallbackUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`;
-                const resp2 = await fetch(fallbackUrl);
+                const resp2 = await fetch(fallbackUrl, { headers: { 'Referer': 'https://translate.google.com/' } });
                 if (resp2.ok) {
-                    audioChunks.push(await resp2.arrayBuffer());
+                    const buf2 = await resp2.arrayBuffer();
+                    if (buf2.byteLength > 100) audioChunks.push(buf2);
                 }
             } catch (e2) {
-                console.error('[AccentFlow BG] Fallback TTS also failed:', e2);
-                notifyPopup('error', 'TTS audio fetch failed. Check internet connection.');
+                console.error('[AccentFlow BG] All TTS sources failed:', e2.message);
+                notifyPopup('error', 'TTS fetch failed — check internet.');
             }
         }
     }
@@ -244,13 +247,18 @@ chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
         case 'convertText':
             // Received recognized text → fetch TTS and send back
             notifyPopup('transcript', message.text);
-
-            fetchTTSAudio(message.text).then((audioBuffer) => {
-                if (audioBuffer && sender.tab) {
-                    sendAudioToTab(sender.tab.id, audioBuffer);
-                    notifyPopup('converted', message.text);
-                }
-            });
+            {
+                // Get gender from saved settings
+                const gender = message.gender || 'male';
+                fetchTTSAudio(message.text, gender).then((audioBuffer) => {
+                    if (audioBuffer && sender.tab) {
+                        sendAudioToTab(sender.tab.id, audioBuffer);
+                        notifyPopup('converted', message.text);
+                    } else {
+                        console.warn('[AccentFlow BG] No audio buffer returned from TTS');
+                    }
+                });
+            }
             break;
 
         case 'interim':
