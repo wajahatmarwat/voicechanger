@@ -27,6 +27,10 @@
     // Track ALL RTCPeerConnections created on this page
     const allPeerConnections = new Set();
 
+    // Track the real microphone stream
+    let realMicStream = null;
+    let micSourceNode = null;
+
     // ── Save originals ──────────────────────────────────────────────────
     const _origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
     const _origRTCPC = window.RTCPeerConnection;
@@ -75,6 +79,50 @@
         }
     }
 
+    /**
+     * Capture real microphone and mix it into the stream
+     * This is CRITICAL for the other person to hear your voice
+     */
+    async function captureAndMixRealMic() {
+        try {
+            ensureAudioContext();
+            if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            // Get the real microphone stream
+            const micStream = await _origGUM({
+                audio: {
+                    echoCancellation: true,
+                    noiseSuppression: true,
+                    autoGainControl: true,
+                },
+                video: false,
+            });
+
+            realMicStream = micStream;
+            const micTracks = micStream.getAudioTracks();
+            if (micTracks.length === 0) {
+                console.warn('[AccentFlow] No mic tracks available');
+                return;
+            }
+
+            // Create source from real microphone
+            micSourceNode = audioCtx.createMediaStreamSource(micStream);
+            
+            // Create a gain node to control mic volume (allow user to adjust)
+            const micGain = audioCtx.createGain();
+            micGain.gain.value = 1.0;
+
+            // Connect: Mic -> Gain -> Stream Destination
+            // This ensures the real mic is MIXED into the output stream
+            micSourceNode.connect(micGain);
+            micGain.connect(streamDest);
+
+            console.log('[AccentFlow] ✅ Real microphone captured and mixed into stream');
+        } catch (err) {
+            console.error('[AccentFlow] Failed to capture mic:', err.message);
+        }
+    }
+
     function getTTSTrack() {
         ensureAudioContext();
         const tracks = streamDest?.stream?.getAudioTracks() || [];
@@ -89,6 +137,9 @@
         ensureAudioContext();
         if (audioCtx.state === 'suspended') await audioCtx.resume();
 
+        // First, capture the real microphone
+        await captureAndMixRealMic();
+
         const fakeTrack = getTTSTrack();
         if (!fakeTrack) {
             console.warn('[AccentFlow] No TTS track ready yet');
@@ -100,15 +151,6 @@
             if (pc.connectionState === 'closed') continue;
             for (const sender of pc.getSenders()) {
                 if (sender.track?.kind === 'audio') {
-                    try {
-                        // Attach real mic clock to AudioContext
-                        const hwSrc  = audioCtx.createMediaStreamSource(new MediaStream([sender.track]));
-                        const hwMute = audioCtx.createGain();
-                        hwMute.gain.value = 0;
-                        hwSrc.connect(hwMute);
-                        hwMute.connect(streamDest);
-                    } catch(e) {}
-
                     try {
                         await sender.replaceTrack(fakeTrack);
                         replaced++;
@@ -151,15 +193,10 @@
         _origRTCPC.prototype.addTrack = function(track, ...streams) {
             if (isActive && track?.kind === 'audio') {
                 console.log('[AccentFlow] addTrack intercepted ✅');
+                // Capture real mic if not already done
+                captureAndMixRealMic().catch(e => console.warn('[AccentFlow] Mic capture failed:', e));
                 const fakeTrack = getTTSTrack();
                 if (fakeTrack) {
-                    try {
-                        const hwSrc  = audioCtx.createMediaStreamSource(new MediaStream([track]));
-                        const hwMute = audioCtx.createGain();
-                        hwMute.gain.value = 0;
-                        hwSrc.connect(hwMute);
-                        hwMute.connect(streamDest);
-                    } catch(e) {}
                     return origAddTrack.call(this, fakeTrack, ...streams);
                 }
             }
@@ -174,17 +211,10 @@
                     (trackOrKind instanceof MediaStreamTrack && trackOrKind.kind === 'audio');
                 if (isAudio) {
                     console.log('[AccentFlow] addTransceiver intercepted ✅');
+                    // Capture real mic if not already done
+                    captureAndMixRealMic().catch(e => console.warn('[AccentFlow] Mic capture failed:', e));
                     const fakeTrack = getTTSTrack();
                     if (fakeTrack) {
-                        if (trackOrKind instanceof MediaStreamTrack) {
-                            try {
-                                const hwSrc  = audioCtx.createMediaStreamSource(new MediaStream([trackOrKind]));
-                                const hwMute = audioCtx.createGain();
-                                hwMute.gain.value = 0;
-                                hwSrc.connect(hwMute);
-                                hwMute.connect(streamDest);
-                            } catch(e) {}
-                        }
                         return origAddTransceiver.call(this, fakeTrack, init);
                     }
                 }
@@ -217,20 +247,14 @@
         }
         console.log('[AccentFlow] getUserMedia intercepted');
         try {
-            const realStream = await _origGUM.call(navigator.mediaDevices, {
-                audio: { echoCancellation: true, noiseSuppression: true },
-                video: false,
-            });
+            // IMPORTANT: Capture the real stream first
+            await captureAndMixRealMic();
+            
             ensureAudioContext();
             if (audioCtx.state === 'suspended') await audioCtx.resume();
-            try {
-                const micSrc   = audioCtx.createMediaStreamSource(realStream);
-                const muteGain = audioCtx.createGain();
-                muteGain.gain.value = 0;
-                micSrc.connect(muteGain);
-                muteGain.connect(streamDest);
-            } catch(e) {}
-            window.__accentflow_realStream = realStream;
+            
+            // Return the mixed stream (real mic + TTS)
+            window.__accentflow_realStream = realMicStream;
             window.postMessage({ type: 'ACCENTFLOW_MIC_READY' }, '*');
             return streamDest.stream;
         } catch (err) {
@@ -358,6 +382,12 @@
                 isActive = false;
                 stopSTT();
                 window.speechSynthesis.cancel();
+                // Clean up mic
+                if (realMicStream) {
+                    realMicStream.getTracks().forEach(track => track.stop());
+                    realMicStream = null;
+                    micSourceNode = null;
+                }
                 if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; streamDest = null; }
                 console.log('[AccentFlow] ⏹ Deactivated');
                 break;
