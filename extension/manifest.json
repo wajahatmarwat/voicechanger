@@ -13,7 +13,9 @@
         "<all_urls>",
         "https://translate.google.com/*",
         "https://translate.googleapis.com/*",
-        "https://api.streamelements.com/*"
+        "https://api.streamelements.com/*",
+        "https://tiktok-tts.weilnet.workers.dev/*",
+        "https://voice.reverso.net/*"
     ],
     "action": {
         "default_popup": "popup.html",

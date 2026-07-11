@@ -15,54 +15,19 @@ let activeTabId = null;
  * Returns American English audio as ArrayBuffer
  */
 async function fetchTTSAudio(text, gender = 'male') {
-    const chunks = splitText(text, 200);
+    const chunks = splitText(text, 180);
     const audioChunks = [];
-
-    // StreamElements TTS — free, reliable, Amazon Polly voices, no API key needed
-    // Brian = American male, Joanna = American female
-    const voice = gender === 'female' ? 'Joanna' : 'Brian';
 
     for (const chunk of chunks) {
         if (!chunk.trim()) continue;
-        const encoded = encodeURIComponent(chunk.trim());
-        const url = `https://api.streamelements.com/kappa/v2/speech?voice=${voice}&text=${encoded}`;
-
-        try {
-            const response = await fetch(url);
-
-            if (!response.ok) {
-                throw new Error(`StreamElements TTS HTTP ${response.status}`);
-            }
-
-            const buffer = await response.arrayBuffer();
-            if (buffer.byteLength > 100) {
-                audioChunks.push(buffer);
-                console.log(`[AccentFlow BG] TTS fetched OK (${buffer.byteLength} bytes)`);
-            }
-        } catch (err) {
-            console.error('[AccentFlow BG] StreamElements TTS failed:', err.message);
-            // Fallback: Google Translate TTS
-            try {
-                const fallbackUrl = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`;
-                const resp2 = await fetch(fallbackUrl, { headers: { 'Referer': 'https://translate.google.com/' } });
-                if (resp2.ok) {
-                    const buf2 = await resp2.arrayBuffer();
-                    if (buf2.byteLength > 100) audioChunks.push(buf2);
-                }
-            } catch (e2) {
-                console.error('[AccentFlow BG] All TTS sources failed:', e2.message);
-                notifyPopup('error', 'TTS fetch failed — check internet.');
-            }
-        }
+        const buf = await fetchTTSChunk(chunk.trim(), gender);
+        if (buf) audioChunks.push(buf);
     }
 
     if (audioChunks.length === 0) return null;
-
-    // If single chunk, return directly
     if (audioChunks.length === 1) return audioChunks[0];
 
-    // Concatenate multiple chunks
-    const totalLength = audioChunks.reduce((sum, buf) => sum + buf.byteLength, 0);
+    const totalLength = audioChunks.reduce((sum, b) => sum + b.byteLength, 0);
     const combined = new Uint8Array(totalLength);
     let offset = 0;
     for (const buf of audioChunks) {
@@ -71,6 +36,80 @@ async function fetchTTSAudio(text, gender = 'male') {
     }
     return combined.buffer;
 }
+
+/**
+ * Try multiple TTS sources in sequence until one succeeds
+ */
+async function fetchTTSChunk(text, gender) {
+    const encoded = encodeURIComponent(text);
+    // TikTok voice: en_us_001 = male, en_us_002 = female
+    const tiktokVoice = gender === 'female' ? 'en_us_002' : 'en_us_001';
+    // Reverso voice: Bradley22k = male, Heather22k = female
+    const reversoVoice = gender === 'female' ? 'Heather22k' : 'Bradley22k';
+
+    // ── Source 1: TikTok TTS proxy (free, no API key, returns base64 MP3) ──
+    try {
+        const resp = await fetch('https://tiktok-tts.weilnet.workers.dev/api/generation', {
+            method: 'POST',
+            headers: { 'Content-Type': 'application/json' },
+            body: JSON.stringify({ text, voice: tiktokVoice }),
+        });
+        if (resp.ok) {
+            const json = await resp.json();
+            if (json.success && json.data) {
+                const binary = atob(json.data);
+                const bytes  = new Uint8Array(binary.length);
+                for (let i = 0; i < binary.length; i++) bytes[i] = binary.charCodeAt(i);
+                if (bytes.byteLength > 100) {
+                    console.log('[AccentFlow BG] TikTok TTS OK (' + bytes.byteLength + ' bytes)');
+                    return bytes.buffer;
+                }
+            }
+        }
+    } catch (e) {
+        console.warn('[AccentFlow BG] TikTok TTS failed:', e.message);
+    }
+
+    // ── Source 2: Reverso Voice (no API key, American voices) ──
+    try {
+        const b64text = btoa(unescape(encodeURIComponent(text)));
+        const resp = await fetch(
+            `https://voice.reverso.net/RestPronunciation.svc/v1/output=json/GetVoiceStream/voiceName=${reversoVoice}?inputText=${b64text}`,
+            { headers: { 'Accept': 'audio/mpeg' } }
+        );
+        if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf.byteLength > 100) {
+                console.log('[AccentFlow BG] Reverso TTS OK (' + buf.byteLength + ' bytes)');
+                return buf;
+            }
+        }
+    } catch (e) {
+        console.warn('[AccentFlow BG] Reverso TTS failed:', e.message);
+    }
+
+    // ── Source 3: Google Translate (gtx client — less restricted) ──
+    try {
+        const resp = await fetch(
+            `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`,
+            { headers: { 'Referer': 'https://translate.google.com/' } }
+        );
+        if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf.byteLength > 100) {
+                console.log('[AccentFlow BG] Google TTS OK (' + buf.byteLength + ' bytes)');
+                return buf;
+            }
+        }
+    } catch (e) {
+        console.warn('[AccentFlow BG] Google TTS failed:', e.message);
+    }
+
+    console.error('[AccentFlow BG] All TTS sources failed for chunk:', text);
+    notifyPopup('error', 'TTS unavailable — check internet connection.');
+    return null;
+}
+
 
 /**
  * Split text into chunks at sentence boundaries
