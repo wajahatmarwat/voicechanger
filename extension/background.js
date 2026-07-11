@@ -164,23 +164,51 @@ async function handlePopupMessage(msg) {
         case 'activate': {
             const [tab] = await chrome.tabs.query({ active: true, currentWindow: true });
             if (!tab) {
-                notifyPopup('error', 'No active tab found');
+                notifyPopup('error', 'No active tab found. Open a webpage first.');
                 return;
             }
+
+            // Block chrome:// and extension pages (scripts can't run there)
+            if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
+                notifyPopup('error', 'Please navigate to your ViciDial page first, then click Start.');
+                return;
+            }
+
             activeTabId = tab.id;
             isActive = true;
 
-            // Tell content script to activate
             try {
+                // Step 1: Inject inject.js into the MAIN world (overrides getUserMedia)
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['inject.js'],
+                    world: 'MAIN',
+                });
+
+                // Step 2: Inject content.js into the ISOLATED world (message relay)
+                await chrome.scripting.executeScript({
+                    target: { tabId: tab.id },
+                    files: ['content.js'],
+                    world: 'ISOLATED',
+                });
+
+                // Step 3: Tell the newly injected content script to activate
+                // Small delay to ensure content script is ready
+                await new Promise(resolve => setTimeout(resolve, 200));
                 await chrome.tabs.sendMessage(tab.id, { action: 'activate' });
+
                 notifyPopup('activated', null);
+                console.log('[AccentFlow BG] Activated on tab:', tab.id, tab.url);
+
             } catch (err) {
-                notifyPopup('error', 'Could not connect to page. Try refreshing the tab.');
+                console.error('[AccentFlow BG] Injection failed:', err);
+                notifyPopup('error', 'Injection failed: ' + err.message + '. Try refreshing ViciDial page.');
                 isActive = false;
                 activeTabId = null;
             }
             break;
         }
+
 
         case 'deactivate': {
             if (activeTabId) {

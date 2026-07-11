@@ -6,9 +6,11 @@
     "permissions": [
         "storage",
         "activeTab",
-        "tabs"
+        "tabs",
+        "scripting"
     ],
     "host_permissions": [
+        "<all_urls>",
         "https://translate.google.com/*",
         "https://translate.googleapis.com/*"
     ],

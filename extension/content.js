@@ -4,15 +4,6 @@
  * Relays messages between inject.js (page context) and background.js (service worker)
  */
 
-// ── Inject inject.js into the PAGE's MAIN world ──────────
-// (Manifest V3 doesn't allow world:MAIN in content_scripts declaratively)
-(function injectScript() {
-    const script = document.createElement('script');
-    script.src = chrome.runtime.getURL('inject.js');
-    script.onload = function () { this.remove(); };
-    (document.head || document.documentElement).appendChild(script);
-})();
-
 // ── Relay: Page → Background ────────────────────────────
 window.addEventListener('message', (event) => {
     if (event.source !== window || !event.data || !event.data.type) return;
