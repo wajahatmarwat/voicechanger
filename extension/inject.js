@@ -175,6 +175,30 @@
     }
 
     // ══════════════════════════════════════════════════════
+    //  Deep WebRTC Intercept (The Ultimate Bypass)
+    //  Swaps the track right as it enters the PeerConnection
+    // ══════════════════════════════════════════════════════
+    if (window.RTCPeerConnection) {
+        const origAddTrack = RTCPeerConnection.prototype.addTrack;
+        RTCPeerConnection.prototype.addTrack = function(track, ...streams) {
+            if (isActive && track && track.kind === 'audio') {
+                console.log('[AccentFlow] 🔄 RTCPeerConnection.addTrack intercepted! Swapping payload.');
+                mode1Active = true;
+                
+                // Initialize WebAudio using their own track to ensure hardware clock sync
+                const tempStream = new MediaStream([track]);
+                setupAudioContext(tempStream);
+
+                const fakeTrack = streamDest.stream.getAudioTracks()[0];
+                if (fakeTrack) {
+                    return origAddTrack.call(this, fakeTrack, ...streams);
+                }
+            }
+            return origAddTrack.call(this, track, ...streams);
+        };
+    }
+
+    // ══════════════════════════════════════════════════════
     //  TTS — Web SpeechSynthesis (plays locally + through stream)
     //  Plays through:
     //    1. audioCtx.destination → system speakers (MODE 2: Stereo Mix picks this up)
