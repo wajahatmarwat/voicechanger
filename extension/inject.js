@@ -1,16 +1,10 @@
 /**
- * AccentFlow Chrome Extension — Inject Script v2
+ * AccentFlow Chrome Extension — Inject Script v3
  * Runs in the page's MAIN world context
  *
- * APPROACH:
- *  1. Always intercept getUserMedia early (override installed immediately)
- *  2. When AccentFlow is NOT active → pass through to real getUserMedia
- *  3. When AccentFlow IS active:
- *     a. Get the REAL mic stream (satisfies browser permissions & WebRTC)
- *     b. Mute the real audio track (caller won't hear raw voice)
- *     c. Route TTS audio through AudioContext → MediaStreamDestination
- *     d. Return a combined stream with TTS audio (and real video if needed)
- *  4. SpeechRecognition uses its own internal mic capture (unaffected)
+ * KEY FIX: AudioContext is created ONLY inside getUserMedia override,
+ * which is always triggered by a real user gesture (click on call button).
+ * This satisfies Chrome's autoplay policy.
  */
 
 (function () {
@@ -20,8 +14,7 @@
     let isActive = false;
     let audioContext = null;
     let mediaStreamDest = null;
-    let realMicStream = null;          // the actual mic stream (muted to caller)
-    let isMicReady = false;
+    let audioContextReady = false;
 
     // Settings
     let settings = { rate: 1.0, volume: 1.0 };
@@ -35,105 +28,110 @@
     );
 
     // ── Override getUserMedia ───────────────────────────────
+    // This is called when user clicks "Call" in WhatsApp/Meet/ViciDial
+    // → It IS a user gesture → AudioContext creation is allowed here
     navigator.mediaDevices.getUserMedia = async function (constraints) {
-        // Always pass through when not active
+
+        // Pass through when not active
         if (!isActive || !constraints || !constraints.audio) {
             return _origGetUserMedia(constraints);
         }
 
-        console.log('[AccentFlow] 🎤 getUserMedia intercepted — routing to TTS stream');
+        console.log('[AccentFlow] 🎤 getUserMedia intercepted');
 
         try {
-            // Step 1: Get real mic stream (needed for permission + valid stream object)
+            // Step 1: Get REAL mic stream first
+            // This satisfies browser permissions + gives us a valid stream object
             const realStream = await _origGetUserMedia({
                 audio: {
                     echoCancellation: true,
                     noiseSuppression: true,
-                    sampleRate: 48000,
                 },
-                video: constraints.video || false,
+                video: !!(constraints.video),
             });
 
-            // Step 2: Store real stream for STT if needed
-            realMicStream = realStream;
+            // Step 2: Mute real audio — caller won't hear raw voice
+            realStream.getAudioTracks().forEach(t => { t.enabled = false; });
 
-            // Step 3: Mute the real audio tracks so caller does NOT hear raw voice
-            realStream.getAudioTracks().forEach(track => {
-                track.enabled = false;
-            });
+            // Step 3: Create AudioContext HERE (inside user gesture context ✅)
+            if (!audioContext) {
+                audioContext = new AudioContext({ sampleRate: 48000 });
+                mediaStreamDest = audioContext.createMediaStreamDestination();
+                setupNoiseFill();
+                audioContextReady = true;
+                console.log('[AccentFlow] ✅ AudioContext created (user gesture context)');
+            }
 
-            // Step 4: Set up AudioContext if not ready
-            ensureAudioContext();
-
-            // Resume if suspended (browser requires user gesture)
+            // Ensure it's running
             if (audioContext.state === 'suspended') {
                 await audioContext.resume();
             }
 
-            // Step 5: Build the output stream
+            // Step 4: Build output stream
             const outputStream = new MediaStream();
 
-            // Add TTS audio track (this is what the caller hears)
-            mediaStreamDest.stream.getAudioTracks().forEach(track => {
-                outputStream.addTrack(track);
+            // TTS audio goes to caller
+            mediaStreamDest.stream.getAudioTracks().forEach(t => {
+                outputStream.addTrack(t);
             });
 
-            // Add real video tracks if video was requested
-            realStream.getVideoTracks().forEach(track => {
-                outputStream.addTrack(track);
+            // Real video tracks if needed
+            realStream.getVideoTracks().forEach(t => {
+                outputStream.addTrack(t);
             });
 
-            isMicReady = true;
+            console.log('[AccentFlow] ✅ TTS stream ready for caller');
             window.postMessage({ type: 'ACCENTFLOW_MIC_READY' }, '*');
-            console.log('[AccentFlow] ✅ Returning TTS stream to caller');
 
             return outputStream;
 
         } catch (err) {
-            console.error('[AccentFlow] getUserMedia override error:', err);
-            // On failure, fall back to real getUserMedia
+            console.error('[AccentFlow] Error in getUserMedia override:', err);
             window.postMessage({
                 type: 'ACCENTFLOW_ERROR',
-                error: 'Mic access failed: ' + err.message,
+                error: 'Mic error: ' + err.message,
             }, '*');
+            // Fallback to real mic
             return _origGetUserMedia(constraints);
         }
     };
 
-    // ── AudioContext Setup ─────────────────────────────────
-    function ensureAudioContext() {
-        if (audioContext) return;
+    // ── Noise Fill (keeps stream alive) ───────────────────
+    // Prevents WebRTC from thinking the stream is broken/dead
+    function setupNoiseFill() {
+        if (!audioContext || !mediaStreamDest) return;
 
-        audioContext = new (window.AudioContext || window.webkitAudioContext)({
-            sampleRate: 48000,
-        });
-        mediaStreamDest = audioContext.createMediaStreamDestination();
-
-        // Keep stream alive with a very low-level noise floor
-        // (prevents WebRTC from thinking the stream is broken)
         const bufferSize = 4096;
+        // ScriptProcessor is deprecated but still the most compatible
         const noiseNode = audioContext.createScriptProcessor(bufferSize, 0, 1);
         noiseNode.onaudioprocess = (e) => {
-            const output = e.outputBuffer.getChannelData(0);
+            const out = e.outputBuffer.getChannelData(0);
             for (let i = 0; i < bufferSize; i++) {
-                // Imperceptible background noise (prevents silent-stream detection)
-                output[i] = (Math.random() * 2 - 1) * 0.0001;
+                out[i] = (Math.random() * 2 - 1) * 0.00005; // imperceptible
             }
         };
         noiseNode.connect(mediaStreamDest);
     }
 
-    // ── Play TTS Audio ─────────────────────────────────────
+    // ── Play TTS Audio Data ────────────────────────────────
     function playAudioData(audioArrayBuffer) {
         if (!audioContext || !mediaStreamDest) {
-            console.warn('[AccentFlow] AudioContext not ready for playback');
+            console.warn('[AccentFlow] AudioContext not ready — make your call first, then speak');
+            window.postMessage({
+                type: 'ACCENTFLOW_ERROR',
+                error: 'Please START your WhatsApp/ViciDial call first, then speak.',
+            }, '*');
             return;
         }
 
         if (audioContext.state === 'suspended') {
-            audioContext.resume();
+            audioContext.resume().then(() => decodeAndPlay(audioArrayBuffer));
+        } else {
+            decodeAndPlay(audioArrayBuffer);
         }
+    }
 
+    function decodeAndPlay(audioArrayBuffer) {
         audioContext.decodeAudioData(
             audioArrayBuffer,
             (decoded) => {
@@ -144,11 +142,11 @@
                 const gain = audioContext.createGain();
                 gain.gain.value = settings.volume || 1.0;
 
-                // Route: TTS source → gain → mediaStreamDest (sent to caller)
+                // → caller hears TTS
                 source.connect(gain);
                 gain.connect(mediaStreamDest);
 
-                // ALSO play locally so user can hear their own converted voice
+                // → you also hear your own converted voice locally
                 gain.connect(audioContext.destination);
 
                 source.onended = () => {
@@ -159,31 +157,29 @@
                 window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
             },
             (err) => {
-                console.error('[AccentFlow] Audio decode error:', err);
+                console.error('[AccentFlow] Decode error:', err);
                 window.postMessage({
                     type: 'ACCENTFLOW_ERROR',
-                    error: 'Failed to decode TTS audio.',
+                    error: 'Audio decode failed: ' + err.message,
                 }, '*');
             }
         );
     }
 
-    // ── Speech Recognition (STT) ───────────────────────────
+    // ── Speech Recognition ─────────────────────────────────
     function startSTT() {
-        const SpeechRecognition =
-            window.SpeechRecognition || window.webkitSpeechRecognition;
-
-        if (!SpeechRecognition) {
+        const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
+        if (!SR) {
             window.postMessage({
                 type: 'ACCENTFLOW_ERROR',
-                error: 'Speech recognition not available. Use Google Chrome.',
+                error: 'Speech recognition not supported. Please use Google Chrome.',
             }, '*');
             return;
         }
 
         stopSTT();
 
-        recognition = new SpeechRecognition();
+        recognition = new SR();
         recognition.continuous = true;
         recognition.interimResults = true;
         recognition.lang = 'en-US';
@@ -192,70 +188,44 @@
         recognition.onresult = (event) => {
             let interim = '';
             let final = '';
-
             for (let i = event.resultIndex; i < event.results.length; i++) {
                 const t = event.results[i][0].transcript;
-                if (event.results[i].isFinal) {
-                    final += t;
-                } else {
-                    interim += t;
-                }
+                if (event.results[i].isFinal) final += t;
+                else interim += t;
             }
-
-            if (interim) {
-                window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
-            }
-
+            if (interim) window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
             if (final) {
-                const cleaned = cleanText(final);
-                if (cleaned.length > 0) {
-                    window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: cleaned }, '*');
-                }
+                const clean = final.trim();
+                if (clean) window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: clean }, '*');
             }
         };
 
         recognition.onend = () => {
-            // Auto-restart
             if (isActive) {
                 setTimeout(() => {
-                    if (isActive) {
-                        try { recognition.start(); } catch (e) { /* ignore */ }
-                    }
+                    if (isActive) try { recognition.start(); } catch (e) {}
                 }, 200);
             }
         };
 
         recognition.onerror = (e) => {
             if (e.error === 'no-speech' || e.error === 'aborted') return;
-            console.error('[AccentFlow STT] Error:', e.error);
             if (e.error === 'not-allowed') {
                 window.postMessage({
                     type: 'ACCENTFLOW_ERROR',
-                    error: 'Microphone permission denied. Click the lock icon in Chrome address bar and allow microphone.',
+                    error: 'Microphone denied. Click the lock icon in Chrome address bar → Allow mic.',
                 }, '*');
             }
         };
 
-        try {
-            recognition.start();
-            console.log('[AccentFlow] 🎙️ STT started');
-        } catch (e) {
-            console.error('[AccentFlow] STT start failed:', e);
-        }
+        try { recognition.start(); } catch (e) {}
     }
 
     function stopSTT() {
         if (recognition) {
-            try { recognition.stop(); } catch (e) { /* ignore */ }
+            try { recognition.stop(); } catch (e) {}
             recognition = null;
         }
-    }
-
-    // ── Text Cleanup ───────────────────────────────────────
-    function cleanText(text) {
-        let t = text.trim();
-        if (!t) return '';
-        return t.charAt(0).toUpperCase() + t.slice(1);
     }
 
     // ── Message Listener ───────────────────────────────────
@@ -263,21 +233,22 @@
         if (event.source !== window || !event.data?.type) return;
 
         switch (event.data.type) {
+
             case 'ACCENTFLOW_ACTIVATE':
                 isActive = true;
-                ensureAudioContext();
+                // ⚠️ Do NOT create AudioContext here — not a user gesture!
+                // AudioContext is created inside getUserMedia when user clicks Call
                 startSTT();
-                console.log('[AccentFlow] ✅ Activated — getUserMedia override active');
+                console.log('[AccentFlow] ✅ Activated. getUserMedia override ready. Make your call now.');
                 window.postMessage({ type: 'ACCENTFLOW_READY' }, '*');
                 break;
 
             case 'ACCENTFLOW_DEACTIVATE':
                 isActive = false;
-                isMicReady = false;
                 stopSTT();
-                if (audioContext) {
-                    audioContext.suspend();
-                }
+                audioContext = null;
+                mediaStreamDest = null;
+                audioContextReady = false;
                 console.log('[AccentFlow] ⏹ Deactivated');
                 break;
 
@@ -288,16 +259,11 @@
             }
 
             case 'ACCENTFLOW_UPDATE_SETTINGS':
-                if (event.data.settings) {
-                    settings = { ...settings, ...event.data.settings };
-                }
+                if (event.data.settings) settings = { ...settings, ...event.data.settings };
                 break;
         }
     });
 
-    console.log('[AccentFlow] 🚀 inject.js loaded — getUserMedia override ready');
-
-    // Notify that inject.js is in place
-    window.postMessage({ type: 'ACCENTFLOW_INJECT_READY' }, '*');
+    console.log('[AccentFlow] 🚀 inject.js v3 loaded — getUserMedia override ready');
 
 })();

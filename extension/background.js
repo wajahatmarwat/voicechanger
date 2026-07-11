@@ -168,9 +168,9 @@ async function handlePopupMessage(msg) {
                 return;
             }
 
-            // Block chrome:// and extension pages (scripts can't run there)
+            // Block chrome:// internal pages
             if (!tab.url || tab.url.startsWith('chrome://') || tab.url.startsWith('chrome-extension://')) {
-                notifyPopup('error', 'Please navigate to your ViciDial page first, then click Start.');
+                notifyPopup('error', 'Please open your ViciDial / WhatsApp / Meet page first, then click Start.');
                 return;
             }
 
@@ -178,38 +178,35 @@ async function handlePopupMessage(msg) {
             isActive = true;
 
             try {
-                // Step 1: Inject inject.js into the MAIN world (overrides getUserMedia)
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    files: ['inject.js'],
-                    world: 'MAIN',
-                });
-
-                // Step 2: Inject content.js into the ISOLATED world (message relay)
-                await chrome.scripting.executeScript({
-                    target: { tabId: tab.id },
-                    files: ['content.js'],
-                    world: 'ISOLATED',
-                });
-
-                // Step 3: Tell the newly injected content script to activate
-                // Small delay to ensure content script is ready
-                await new Promise(resolve => setTimeout(resolve, 200));
+                // inject.js and content.js are already declared in manifest — just activate
                 await chrome.tabs.sendMessage(tab.id, { action: 'activate' });
-
                 notifyPopup('activated', null);
                 console.log('[AccentFlow BG] Activated on tab:', tab.id, tab.url);
-
             } catch (err) {
-                console.error('[AccentFlow BG] Injection failed:', err);
-                notifyPopup('error', 'Injection failed: ' + err.message + '. Try refreshing ViciDial page.');
-                isActive = false;
-                activeTabId = null;
+                // Scripts might not be ready yet — try injecting programmatically as fallback
+                console.warn('[AccentFlow BG] sendMessage failed, injecting scripts:', err.message);
+                try {
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['inject.js'],
+                        world: 'MAIN',
+                    });
+                    await chrome.scripting.executeScript({
+                        target: { tabId: tab.id },
+                        files: ['content.js'],
+                        world: 'ISOLATED',
+                    });
+                    await new Promise(r => setTimeout(r, 200));
+                    await chrome.tabs.sendMessage(tab.id, { action: 'activate' });
+                    notifyPopup('activated', null);
+                } catch (err2) {
+                    notifyPopup('error', 'Could not connect. Try refreshing the page then click Start again.');
+                    isActive = false;
+                    activeTabId = null;
+                }
             }
             break;
         }
-
-
         case 'deactivate': {
             if (activeTabId) {
                 try {
