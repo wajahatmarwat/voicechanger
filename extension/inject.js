@@ -1,111 +1,61 @@
 /**
- * AccentFlow Chrome Extension — Inject Script v4
- * Runs in the page's MAIN world context
+ * AccentFlow Chrome Extension — Inject Script v5
  *
- * GUARANTEED AUDIOCONTEXT FIX:
- * We listen for the FIRST click on the page after activation.
- * Clicking the Call button in WhatsApp/Meet IS that first click.
- * AudioContext is created inside a real DOM click event — always allowed.
+ * TWO-LEVEL INTERCEPTION (the only reliable approach):
+ *  1. getUserMedia override — intercept mic stream early
+ *  2. RTCPeerConnection.addTrack override — intercept at WebRTC level
+ *     This is the KEY fix: even if WhatsApp processes the stream through
+ *     its own audio pipeline, we replace the track right before it goes
+ *     to the network. The caller then hears our TTS audio.
  *
- * Also: replaced deprecated ScriptProcessorNode with OscillatorNode.
+ * AudioContext created on first page click (user gesture guarantee).
  */
 
 (function () {
     'use strict';
 
-    // Guard: don't inject twice
-    if (window.__accentflow_injected) return;
-    window.__accentflow_injected = true;
+    if (window.__accentflow_v5) return;
+    window.__accentflow_v5 = true;
 
     // ── State ──────────────────────────────────────────────
     let isActive = false;
     let audioCtx = null;
     let streamDest = null;
-    let keepAliveNode = null;
     let settings = { rate: 1.0, volume: 1.0 };
     let recognition = null;
+    let interceptedSenders = []; // track all RTCPeerConnection senders we replaced
 
-    // ── Save original getUserMedia ─────────────────────────
+    // ── Save originals FIRST (before any page code runs) ──
     const _origGUM = navigator.mediaDevices.getUserMedia.bind(navigator.mediaDevices);
+    const _origAddTrack = RTCPeerConnection.prototype.addTrack;
+    const _origAddStream = RTCPeerConnection.prototype.addStream; // legacy
 
-    // ── AudioContext Bootstrap ─────────────────────────────
-    // Called from INSIDE a click event — guaranteed to be allowed
-    function initAudioContext() {
-        if (audioCtx) return; // already ready
-
-        try {
-            audioCtx = new AudioContext({ sampleRate: 48000 });
-            streamDest = audioCtx.createMediaStreamDestination();
-
-            // Keep stream alive with a near-silent oscillator (replaces deprecated ScriptProcessor)
-            keepAliveNode = audioCtx.createOscillator();
-            const muteGain = audioCtx.createGain();
-            muteGain.gain.value = 0.00001; // essentially silent, just keeps stream alive
-            keepAliveNode.connect(muteGain);
-            muteGain.connect(streamDest);
-            keepAliveNode.start();
-
-            console.log('[AccentFlow] ✅ AudioContext created successfully');
-            window.postMessage({ type: 'ACCENTFLOW_AUDIO_READY' }, '*');
-        } catch (e) {
-            console.error('[AccentFlow] AudioContext creation failed:', e);
-        }
-    }
-
-    // ── Page Click Listener ────────────────────────────────
-    // Runs once on the first user click after activation — guaranteed user gesture
-    function attachClickListener() {
-        const handler = () => {
-            initAudioContext();
-            // Keep trying to resume if suspended
-            if (audioCtx && audioCtx.state === 'suspended') {
-                audioCtx.resume().catch(() => {});
-            }
-        };
-        // capture: true so we intercept clicks before WhatsApp/Meet handles them
-        document.addEventListener('click', handler, { capture: true });
-        document.addEventListener('touchend', handler, { capture: true, once: true });
-    }
-
-    // ── Override getUserMedia ───────────────────────────────
+    // ══════════════════════════════════════════════════════
+    //  LEVEL 1: getUserMedia Override
+    // ══════════════════════════════════════════════════════
     navigator.mediaDevices.getUserMedia = async function (constraints) {
-        if (!isActive || !constraints || !constraints.audio) {
+        if (!isActive || !constraints?.audio) {
             return _origGUM(constraints);
         }
-
-        console.log('[AccentFlow] 🎤 getUserMedia intercepted');
-
-        // Try to init AudioContext here too — getUserMedia IS a user gesture chain
-        if (!audioCtx) {
-            initAudioContext();
-        }
-        if (audioCtx && audioCtx.state === 'suspended') {
-            await audioCtx.resume().catch(() => {});
-        }
-
+        console.log('[AccentFlow] getUserMedia intercepted');
         try {
-            // Get REAL stream first — needed for valid WebRTC stream + permissions
             const realStream = await _origGUM({
                 audio: { echoCancellation: true, noiseSuppression: true },
                 video: !!(constraints.video),
             });
-
-            // Mute real audio — caller must NOT hear raw accent
+            // Mute real audio — don't let raw voice through
             realStream.getAudioTracks().forEach(t => { t.enabled = false; });
 
             if (!audioCtx || !streamDest) {
-                console.warn('[AccentFlow] AudioContext not ready — returning real stream as fallback');
-                realStream.getAudioTracks().forEach(t => { t.enabled = true; });
+                // AudioContext not ready yet — pass the real (muted) stream
+                // Level 2 (addTrack) will swap the track when WebRTC uses it
+                console.warn('[AccentFlow] AudioContext not ready yet — relying on addTrack intercept');
                 return realStream;
             }
 
-            // Build output stream: TTS audio + real video (if any)
             const out = new MediaStream();
             streamDest.stream.getAudioTracks().forEach(t => out.addTrack(t));
             realStream.getVideoTracks().forEach(t => out.addTrack(t));
-
-            console.log('[AccentFlow] ✅ Returning TTS stream to caller');
-            window.postMessage({ type: 'ACCENTFLOW_MIC_READY' }, '*');
             return out;
 
         } catch (err) {
@@ -115,21 +65,91 @@
         }
     };
 
-    // ── Play TTS Audio ─────────────────────────────────────
+    // ══════════════════════════════════════════════════════
+    //  LEVEL 2: RTCPeerConnection.addTrack Override
+    //  This fires right before audio goes to the network.
+    //  Regardless of how WhatsApp processed the stream,
+    //  we swap the audio track here with our TTS stream.
+    // ══════════════════════════════════════════════════════
+    RTCPeerConnection.prototype.addTrack = function (track, ...streams) {
+        if (isActive && track.kind === 'audio' && audioCtx && streamDest) {
+            const ttsTrack = streamDest.stream.getAudioTracks()[0];
+            if (ttsTrack) {
+                console.log('[AccentFlow] ✅ RTCPeerConnection.addTrack intercepted — swapping audio track to TTS');
+                const sender = _origAddTrack.call(this, ttsTrack, ...streams);
+                interceptedSenders.push({ pc: this, sender });
+                return sender;
+            }
+        }
+        return _origAddTrack.call(this, track, ...streams);
+    };
+
+    // Also intercept legacy addStream
+    if (_origAddStream) {
+        RTCPeerConnection.prototype.addStream = function (stream) {
+            if (isActive && audioCtx && streamDest) {
+                const newStream = new MediaStream();
+                stream.getAudioTracks().forEach(() => {
+                    const ttsTrack = streamDest.stream.getAudioTracks()[0];
+                    if (ttsTrack) newStream.addTrack(ttsTrack);
+                });
+                stream.getVideoTracks().forEach(t => newStream.addTrack(t));
+                console.log('[AccentFlow] ✅ addStream intercepted — swapped audio to TTS');
+                return _origAddStream.call(this, newStream);
+            }
+            return _origAddStream.call(this, stream);
+        };
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  AudioContext Init (must be inside a real user gesture)
+    // ══════════════════════════════════════════════════════
+    function initAudio() {
+        if (audioCtx) return;
+        try {
+            audioCtx = new AudioContext({ sampleRate: 48000 });
+            streamDest = audioCtx.createMediaStreamDestination();
+
+            // Keep-alive: near-silent oscillator so WebRTC doesn't think stream is dead
+            const osc = audioCtx.createOscillator();
+            const silenceGain = audioCtx.createGain();
+            silenceGain.gain.value = 0.00001;
+            osc.connect(silenceGain);
+            silenceGain.connect(streamDest);
+            osc.start();
+
+            console.log('[AccentFlow] ✅ AudioContext + StreamDest ready');
+            window.postMessage({ type: 'ACCENTFLOW_AUDIO_READY' }, '*');
+        } catch (e) {
+            console.error('[AccentFlow] AudioContext init error:', e);
+        }
+    }
+
+    function attachClickListener() {
+        const handler = (evt) => {
+            initAudio();
+            if (audioCtx?.state === 'suspended') audioCtx.resume().catch(() => {});
+        };
+        // capture:true — fires BEFORE WhatsApp's own click handlers
+        document.addEventListener('click', handler, { capture: true });
+        document.addEventListener('touchend', handler, { capture: true, once: true });
+    }
+
+    // ══════════════════════════════════════════════════════
+    //  TTS Playback
+    // ══════════════════════════════════════════════════════
     function playAudio(buffer) {
         if (!audioCtx || !streamDest) {
             window.postMessage({
                 type: 'ACCENTFLOW_ERROR',
-                error: '⚠️ Please click the Call button in WhatsApp first, then speak.',
+                error: 'Click the Call button in WhatsApp first, then speak.',
             }, '*');
             return;
         }
-
-        if (audioCtx.state === 'suspended') {
-            audioCtx.resume().then(() => decode(buffer)).catch(() => {});
-        } else {
-            decode(buffer);
-        }
+        const resume = audioCtx.state === 'suspended'
+            ? audioCtx.resume()
+            : Promise.resolve();
+        resume.then(() => decode(buffer)).catch(() => {});
     }
 
     function decode(buffer) {
@@ -143,28 +163,28 @@
                 gain.gain.value = settings.volume;
 
                 src.connect(gain);
-                gain.connect(streamDest);        // → goes to caller
-                gain.connect(audioCtx.destination); // → plays locally in your ear
+                gain.connect(streamDest);           // ← goes to caller via WebRTC ✅
+                gain.connect(audioCtx.destination); // ← you hear it locally too ✅
 
                 src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
                 src.start(0);
                 window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
             },
             (err) => {
-                console.error('[AccentFlow] decode error:', err);
-                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Audio decode failed.' }, '*');
+                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Audio decode failed: ' + err.message }, '*');
             }
         );
     }
 
-    // ── Speech Recognition (STT) ───────────────────────────
+    // ══════════════════════════════════════════════════════
+    //  Speech Recognition (STT)
+    // ══════════════════════════════════════════════════════
     function startSTT() {
         const SR = window.SpeechRecognition || window.webkitSpeechRecognition;
         if (!SR) {
             window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Use Google Chrome for speech recognition.' }, '*');
             return;
         }
-
         stopSTT();
         recognition = new SR();
         recognition.continuous = true;
@@ -179,50 +199,47 @@
                 else interim += t;
             }
             if (interim) window.postMessage({ type: 'ACCENTFLOW_INTERIM', text: interim }, '*');
-            if (final) {
-                const clean = final.trim();
-                if (clean) window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: clean }, '*');
-            }
+            if (final?.trim()) window.postMessage({ type: 'ACCENTFLOW_FINAL_TEXT', text: final.trim() }, '*');
         };
 
         recognition.onend = () => {
-            if (isActive) setTimeout(() => { if (isActive) try { recognition.start(); } catch (e) {} }, 200);
+            if (isActive) setTimeout(() => { if (isActive) try { recognition.start(); } catch (_) {} }, 200);
         };
 
         recognition.onerror = (e) => {
             if (e.error === 'no-speech' || e.error === 'aborted') return;
             if (e.error === 'not-allowed') {
-                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic permission denied. Click the lock icon → Allow microphone.' }, '*');
+                window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic denied. Click lock icon in address bar → Allow microphone.' }, '*');
             }
         };
 
-        try { recognition.start(); } catch (e) {}
+        try { recognition.start(); } catch (_) {}
     }
 
     function stopSTT() {
-        if (recognition) { try { recognition.stop(); } catch (e) {} recognition = null; }
+        if (recognition) { try { recognition.stop(); } catch (_) {} recognition = null; }
     }
 
-    // ── Message Listener ───────────────────────────────────
+    // ══════════════════════════════════════════════════════
+    //  Message Listener (from content.js)
+    // ══════════════════════════════════════════════════════
     window.addEventListener('message', (e) => {
         if (e.source !== window || !e.data?.type) return;
-
         switch (e.data.type) {
+
             case 'ACCENTFLOW_ACTIVATE':
                 isActive = true;
-                // Attach click listener — AudioContext created on first click (user gesture ✅)
-                attachClickListener();
+                attachClickListener(); // AudioContext on next click (guaranteed gesture)
                 startSTT();
-                console.log('[AccentFlow] ✅ Activated. Click Call button to initialize audio.');
+                console.log('[AccentFlow] ✅ Activated — click Call button to init audio');
                 window.postMessage({ type: 'ACCENTFLOW_READY' }, '*');
                 break;
 
             case 'ACCENTFLOW_DEACTIVATE':
                 isActive = false;
+                interceptedSenders = [];
                 stopSTT();
-                if (keepAliveNode) { try { keepAliveNode.stop(); } catch (_) {} keepAliveNode = null; }
-                if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; }
-                streamDest = null;
+                if (audioCtx) { audioCtx.close().catch(() => {}); audioCtx = null; streamDest = null; }
                 console.log('[AccentFlow] ⏹ Deactivated');
                 break;
 
@@ -236,6 +253,6 @@
         }
     });
 
-    console.log('[AccentFlow] 🚀 inject.js v4 loaded');
+    console.log('[AccentFlow] 🚀 inject.js v5 loaded — dual intercept ready (getUserMedia + RTCPeerConnection)');
 
 })();
