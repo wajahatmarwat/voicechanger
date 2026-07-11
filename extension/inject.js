@@ -57,20 +57,32 @@
     // ══════════════════════════════════════════════════════
     //  AudioContext Setup (created inside getUserMedia — user gesture chain ✅)
     // ══════════════════════════════════════════════════════
-    function setupAudioContext() {
+    function setupAudioContext(realStream) {
         if (audioCtx) return;
         try {
-            audioCtx   = new AudioContext({ sampleRate: 48000 });
+            audioCtx   = new AudioContext(); // let browser pick default sample rate
             streamDest = audioCtx.createMediaStreamDestination();
 
-            // Near-silent oscillator keeps stream "alive" for WebRTC
+            if (realStream) {
+                // BUGFIX: Connect real mic to AudioContext but MUTE it.
+                // This forces WebAudio to use the hardware clock of the real mic.
+                // Without this, WebRTC often drops synthetic audio streams because
+                // they lack physical hardware timing sync!
+                const micSource = audioCtx.createMediaStreamSource(realStream);
+                const muteGain = audioCtx.createGain();
+                muteGain.gain.value = 0; // Mute the real voice!
+                micSource.connect(muteGain);
+                muteGain.connect(streamDest);
+            }
+
+            // Near-silent oscillator keeps stream "alive"
             const osc  = audioCtx.createOscillator();
             const sg   = audioCtx.createGain();
             sg.gain.value = 0.00001;
             osc.connect(sg);
             sg.connect(streamDest);
             osc.start();
-            console.log('[AccentFlow] ✅ AudioContext created inside getUserMedia');
+            console.log('[AccentFlow] ✅ AudioContext created (Hardware clock synced)');
         } catch (e) {
             console.error('[AccentFlow] AudioContext error:', e.message);
         }
@@ -97,7 +109,7 @@
             });
 
             // Create AudioContext HERE — inside getUserMedia = user gesture chain ✅
-            setupAudioContext();
+            setupAudioContext(realStream);
 
             if (audioCtx.state === 'suspended') {
                 await audioCtx.resume();
