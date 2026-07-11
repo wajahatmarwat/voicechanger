@@ -42,12 +42,10 @@ async function fetchTTSAudio(text, gender = 'male') {
  */
 async function fetchTTSChunk(text, gender) {
     const encoded = encodeURIComponent(text);
-    // TikTok voice: en_us_001 = male, en_us_002 = female
-    const tiktokVoice = gender === 'female' ? 'en_us_002' : 'en_us_001';
-    // Reverso voice: Bradley22k = male, Heather22k = female
-    const reversoVoice = gender === 'female' ? 'Heather22k' : 'Bradley22k';
+    const tiktokVoice  = gender === 'female' ? 'en_us_002'   : 'en_us_001';
+    const reversoVoice = gender === 'female' ? 'Heather22k'  : 'Bradley22k';
 
-    // ── Source 1: TikTok TTS proxy (free, no API key, returns base64 MP3) ──
+    // ── Source 1: TikTok TTS proxy ──────────────────────────────────
     try {
         const resp = await fetch('https://tiktok-tts.weilnet.workers.dev/api/generation', {
             method: 'POST',
@@ -66,11 +64,31 @@ async function fetchTTSChunk(text, gender) {
                 }
             }
         }
+        console.warn('[AccentFlow BG] TikTok TTS failed: HTTP ' + resp.status);
     } catch (e) {
-        console.warn('[AccentFlow BG] TikTok TTS failed:', e.message);
+        console.warn('[AccentFlow BG] TikTok TTS error:', e.message);
     }
 
-    // ── Source 2: Reverso Voice (no API key, American voices) ──
+    // ── Source 2: ResponsiveVoice (public demo key, reliable US English) ──
+    try {
+        const rvLang = gender === 'female' ? 'en-US' : 'en-US';
+        const rvName = gender === 'female' ? 'US English Female' : 'US English Male';
+        const resp = await fetch(
+            `https://responsivevoice.org/api/text-to-speech/?text=${encoded}&service=g3&lang=${rvLang}&name=${encodeURIComponent(rvName)}&pitch=0.5&rate=0.5&volume=1&key=fwKl5gsV`
+        );
+        if (resp.ok) {
+            const buf = await resp.arrayBuffer();
+            if (buf.byteLength > 100) {
+                console.log('[AccentFlow BG] ResponsiveVoice TTS OK (' + buf.byteLength + ' bytes)');
+                return buf;
+            }
+        }
+        console.warn('[AccentFlow BG] ResponsiveVoice TTS failed: HTTP ' + resp.status);
+    } catch (e) {
+        console.warn('[AccentFlow BG] ResponsiveVoice TTS error:', e.message);
+    }
+
+    // ── Source 3: Reverso Voice ──────────────────────────────────────
     try {
         const b64text = btoa(unescape(encodeURIComponent(text)));
         const resp = await fetch(
@@ -84,15 +102,16 @@ async function fetchTTSChunk(text, gender) {
                 return buf;
             }
         }
+        console.warn('[AccentFlow BG] Reverso TTS failed: HTTP ' + resp.status);
     } catch (e) {
-        console.warn('[AccentFlow BG] Reverso TTS failed:', e.message);
+        console.warn('[AccentFlow BG] Reverso TTS error:', e.message);
     }
 
-    // ── Source 3: Google Translate (gtx client — less restricted) ──
+    // ── Source 4: Google Translate (gtx client) ──────────────────────
     try {
         const resp = await fetch(
             `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`,
-            { headers: { 'Referer': 'https://translate.google.com/' } }
+            { headers: { 'Referer': 'https://translate.google.com/', 'Accept': 'audio/mpeg' } }
         );
         if (resp.ok) {
             const buf = await resp.arrayBuffer();
@@ -101,12 +120,13 @@ async function fetchTTSChunk(text, gender) {
                 return buf;
             }
         }
+        console.warn('[AccentFlow BG] Google TTS failed: HTTP ' + resp.status);
     } catch (e) {
-        console.warn('[AccentFlow BG] Google TTS failed:', e.message);
+        console.warn('[AccentFlow BG] Google TTS error:', e.message);
     }
 
-    console.error('[AccentFlow BG] All TTS sources failed for chunk:', text);
-    notifyPopup('error', 'TTS unavailable — check internet connection.');
+    console.error('[AccentFlow BG] All 4 TTS sources failed. Text:', text.substring(0, 50));
+    notifyPopup('error', 'TTS unavailable — check internet. You will be heard via real mic.');
     return null;
 }
 
