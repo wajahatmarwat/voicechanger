@@ -81,9 +81,9 @@
     //  ViciDial and simple apps use this stream directly for WebRTC
     //  → TTS audio in this stream → caller hears it ✅
     // ══════════════════════════════════════════════════════
-    navigator.mediaDevices.getUserMedia = async function (constraints) {
+    const customGUM = async function (constraints) {
         if (!isActive || !constraints?.audio) {
-            return _origGUM(constraints);
+            return _origGUM.call(this || navigator.mediaDevices, constraints);
         }
 
         console.log('[AccentFlow] 🎤 getUserMedia intercepted (Mode 1 — Direct Injection)');
@@ -91,7 +91,7 @@
 
         try {
             // Get real mic (keeps permission valid + keeps stream object real)
-            const realStream = await _origGUM({
+            const realStream = await _origGUM.call(this || navigator.mediaDevices, {
                 audio: { echoCancellation: true, noiseSuppression: true },
                 video: !!(constraints.video),
             });
@@ -136,9 +136,14 @@
         } catch (err) {
             console.error('[AccentFlow] getUserMedia error:', err);
             window.postMessage({ type: 'ACCENTFLOW_ERROR', error: 'Mic: ' + err.message }, '*');
-            return _origGUM(constraints);
+            return _origGUM.call(this || navigator.mediaDevices, constraints);
         }
     };
+
+    navigator.mediaDevices.getUserMedia = customGUM;
+    if (window.MediaDevices && MediaDevices.prototype) {
+        MediaDevices.prototype.getUserMedia = customGUM;
+    }
 
     // Also override legacy methods if they exist
     if (navigator.getUserMedia) {
