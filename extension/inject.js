@@ -148,35 +148,25 @@
         if (!mode1Active) {
             window.speechSynthesis.speak(utterance);
         } else {
-            // If Mode 1 is active, we just pipe to stream. No local echo.
-            // Fire speaking events manually since speechSynthesis won't run.
+            // If Mode 1 is active, we rely on ACCENTFLOW_PLAY_AUDIO from background
+            // to pipe the audio into the stream (bypassing CSP).
+            // Fire speaking event manually since speechSynthesis won't run.
             window.postMessage({ type: 'ACCENTFLOW_SPEAKING' }, '*');
-        }
-
-        // MODE 1 bonus: pipe TTS through AudioContext stream
-        // by fetching from Google Translate TTS (works for ViciDial stream injection)
-        if (audioCtx && streamDest) {
-            pipeTextToStream(text.trim());
         }
     }
 
     // ── Pipe TTS audio into the fake mic stream (Mode 1 supplement) ──
-    async function pipeTextToStream(text) {
-        try {
-            const encoded = encodeURIComponent(text);
-            const url = `https://translate.googleapis.com/translate_tts?ie=UTF-8&tl=en-US&client=gtx&q=${encoded}`;
-            const resp = await fetch(url);
-            if (!resp.ok) {
-                if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
-                return;
-            }
-            const arrayBuf = await resp.arrayBuffer();
+    async function playAudioBuffer(audioDataArray) {
+        if (!audioCtx || !streamDest) {
+            window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+            return;
+        }
 
-            if (!audioCtx) {
-                if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
-                return;
-            }
+        try {
             if (audioCtx.state === 'suspended') await audioCtx.resume();
+
+            const uint8 = new Uint8Array(audioDataArray);
+            const arrayBuf = uint8.buffer;
 
             audioCtx.decodeAudioData(arrayBuf, (decoded) => {
                 const src  = audioCtx.createBufferSource();
@@ -189,14 +179,15 @@
                 src.connect(gain);
                 gain.connect(streamDest); // → fake mic stream → ViciDial WebRTC ✅
 
-                if (mode1Active) {
-                    src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
-                }
+                src.onended = () => window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
                 src.start(0);
+            }, (err) => {
+                console.error('[AccentFlow] Audio decode error:', err);
+                window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
             });
         } catch (e) {
-            // Silent fail — if Mode 1 active, ensure UI resets
-            if (mode1Active) window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
+            console.error('[AccentFlow] Audio playback error:', e);
+            window.postMessage({ type: 'ACCENTFLOW_SPEECH_DONE' }, '*');
         }
     }
 
@@ -272,7 +263,11 @@
             case 'ACCENTFLOW_UPDATE_SETTINGS':
                 if (e.data.settings) settings = { ...settings, ...e.data.settings };
                 break;
-            case 'ACCENTFLOW_PLAY_AUDIO': break; // handled locally now
+            case 'ACCENTFLOW_PLAY_AUDIO':
+                if (mode1Active && e.data.audioData) {
+                    playAudioBuffer(e.data.audioData);
+                }
+                break;
         }
     });
 
